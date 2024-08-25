@@ -23,6 +23,8 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		DF86D8F12C7AFB9600A789EF /* alphabet.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; path = alphabet.hpp; sourceTree = "<group>"; };
+		DF86D8F42C7AFC6B00A789EF /* encode_decode_base_whatever.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; path = encode_decode_base_whatever.hpp; sourceTree = "<group>"; };
 		DFD44B342C747B930066235A /* BaseEncodeDecode */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = BaseEncodeDecode; sourceTree = BUILT_PRODUCTS_DIR; };
 		DFD44B372C747B930066235A /* main.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = main.cpp; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -58,6 +60,8 @@
 			isa = PBXGroup;
 			children = (
 				DFD44B372C747B930066235A /* main.cpp */,
+				DF86D8F12C7AFB9600A789EF /* alphabet.hpp */,
+				DF86D8F42C7AFC6B00A789EF /* encode_decode_base_whatever.hpp */,
 			);
 			path = BaseEncodeDecode;
 			sourceTree = "<group>";
@@ -244,20 +248,22 @@
 		DFD44B3C2C747B930066235A /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = 83MLWCD659;
+				CODE_SIGN_STYLE = Manual;
+				DEVELOPMENT_TEAM = "";
 				ENABLE_HARDENED_RUNTIME = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				PROVISIONING_PROFILE_SPECIFIER = "";
 			};
 			name = Debug;
 		};
 		DFD44B3D2C747B930066235A /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = 83MLWCD659;
+				CODE_SIGN_STYLE = Manual;
+				DEVELOPMENT_TEAM = "";
 				ENABLE_HARDENED_RUNTIME = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				PROVISIONING_PROFILE_SPECIFIER = "";
 			};
 			name = Release;
 		};
