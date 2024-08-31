@@ -4,6 +4,7 @@
 //
 //  Created by Saxon Nicholls on 1/8/2024.
 //
+//  me [at] saxonnicholls.com
 
 #ifndef alphabet_hpp
 #define alphabet_hpp

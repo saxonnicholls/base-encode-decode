@@ -4,6 +4,7 @@
 //
 //  Created by Saxon Nicholls on 1/8/2024.
 //
+//  me [at] saxonnicholls.com
 
 #ifndef encode_decode_base_whatever_hpp
 #define encode_decode_base_whatever_hpp
@@ -12,10 +13,6 @@
 #include <stdexcept>
 #include <algorithm>
 #include <cassert>
-#include <vector>
-#include <thread>
-#include <future>
-#include <chrono>
 
 #include "alphabet.hpp"
 
@@ -24,7 +21,6 @@ namespace snicholls {
 
     // Templated function for Base Encoding
     template<size_t BitGroupSize, size_t AlphabetSize, const std::array<char, AlphabetSize>& Alphabet, bool PaddingRequired>
-    constexpr
     std::string BaseEncode(const std::string& input) {
         std::string output;
         size_t bitBuffer = 0;
@@ -57,7 +53,6 @@ namespace snicholls {
 
     // Templated function for Base Decoding 
     template<size_t BitGroupSize, size_t AlphabetSize, const std::array<char, AlphabetSize>& Alphabet, bool PaddingRequired>
-    constexpr
     std::string BaseDecode(const std::string& input) {
         std::string output;
         size_t bitBuffer = 0;
