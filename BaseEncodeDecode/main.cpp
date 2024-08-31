@@ -56,6 +56,13 @@ int main() {
     std::cout << "Base32Hex Encoded (Serial): " << encodedBase32Hex << std::endl;
     std::cout << "Base32Hex Decoded (Serial): " << decodedBase32Hex << std::endl;
 
+    // Base32Crockford
+    std::string encodedBase32Crockford = EncodeBase32Crockford(data);
+    std::string decodedBase32Crockford = DecodeBase32Crockford(encodedBase32Crockford);
+   
+    std::cout << "Base32Crockford Encoded (Serial): " << encodedBase32Crockford << std::endl;
+    std::cout << "Base32Crockford Decoded (Serial): " << decodedBase32Crockford << std::endl;
+    
     // Base64 Encoding/Decoding
     std::string encodedBase64 = EncodeBase64(data);
     std::string decodedBase64 = DecodeBase64(encodedBase64);

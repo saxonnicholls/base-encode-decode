@@ -1,4 +1,3 @@
-
 # Base 64/32/16/8/4/2 Encoding and Decoding in C++
 
 This header only project provides a set of C++ functions for encoding and decoding data using various base encoding schemes, including Base64, Base32, Base16, Base8, Base4, Base2, and custom variants like Base36 and Base32Crockford. These encoding schemes are commonly used for representing binary data in a textual format, making it easier to transmit and store.
@@ -63,15 +62,19 @@ Running main() should give you this:
 ```cpp
 Base2 Encoded (Serial): 01001000011001010110110001101100011011110010110000100000010101110110111101110010011011000110010000100001001000000100100101110100001000000110100101110011001000000110101001110101011100110111010000100000011101110110111101101110011001000110010101110010011001100111010101101100001000000111010001101111001000000111001101100101011001010010000001111001011011110111010100100001
 Base2 Decoded (Serial): Hello, World! It is just wonderful to see you!
+Base4 Encoded (Serial): 1020121112301230123302300200111312331302123012100201020010211310020012211303020012221311130313100200131312331232121012111302121213111230020013101233020013031211121102001321123313110201
+Base4 Decoded (Serial): Hello, World! It is just wonderful to see you!
 Base8 Encoded (Serial): 220625543306745410053557344661441022011135020151346201523527156410073557334621453446316533020164336201633126244036267565102
 Base8 Decoded (Serial): Hello, World! It is just wonderful to see you!
-Base64 Encoded (Serial): SGVsbG8sIFdvcmxkISBJdCBpcyBqdXN0IHdvbmRlcmZ1bCB0byBzZWUgeW91IQ
-Base64 Decoded (Serial): Hello, World! It is just wonderful to see you!
+Base16 Encoded (Serial): 48656C6C6F2C20576F726C6421204974206973206A75737420776F6E64657266756C20746F2073656520796F7521
+Base16 Decoded (Serial): Hello, World! It is just wonderful to see you!
 Base32 Encoded (Serial): JBSWY3DPFQQFO33SNRSCCICJOQQGS4ZANJ2XG5BAO5XW4ZDFOJTHK3BAORXSA43FMUQHS33VEE
 Base32 Decoded (Serial): Hello, World! It is just wonderful to see you!
 Base32Hex Encoded (Serial): 91IMOR3F5GG5ERRIDHI22829EGG6ISP0D9QN6T10ETNMSP35E9J7AR10EHNI0SR5CKG7IRRL44
 Base32Hex Decoded (Serial): Hello, World! It is just wonderful to see you!
-Base16 Encoded (Serial): 48656C6C6F2C20576F726C6421204974206973206A75737420776F6E64657266756C20746F2073656520796F7521
-Base16 Decoded (Serial): Hello, World! It is just wonderful to see you!
+Base32Crockford Encoded (Serial): 91JPRV3F5GG5EVVJDHJ22829EGG6JWS0D9TQ6X10EXQPWS35E9K7AV10EHQJ0WV5CMG7JVVN44
+Base32Crockford Decoded (Serial): Hello, World! It is just wonderful to see you!
+Base64 Encoded (Serial): SGVsbG8sIFdvcmxkISBJdCBpcyBqdXN0IHdvbmRlcmZ1bCB0byBzZWUgeW91IQ
+Base64 Decoded (Serial): Hello, World! It is just wonderful to see you!
 Program ended with exit code: 0
 ```
