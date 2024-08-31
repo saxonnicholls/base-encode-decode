@@ -1,5 +1,5 @@
 
-# Base Encoding and Decoding in C++
+# Base 64/32/16/8/4/2 Encoding and Decoding in C++
 
 This header only project provides a set of C++ functions for encoding and decoding data using various base encoding schemes, including Base64, Base32, Base16, Base8, Base4, Base2, and custom variants like Base36 and Base32Crockford. These encoding schemes are commonly used for representing binary data in a textual format, making it easier to transmit and store.
 
