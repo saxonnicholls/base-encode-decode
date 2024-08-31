@@ -75,6 +75,8 @@ Base32Hex Encoded (Serial): 91IMOR3F5GG5ERRIDHI22829EGG6ISP0D9QN6T10ETNMSP35E9J7
 Base32Hex Decoded (Serial): Hello, World! It is just wonderful to see you!
 Base32Crockford Encoded (Serial): 91JPRV3F5GG5EVVJDHJ22829EGG6JWS0D9TQ6X10EXQPWS35E9K7AV10EHQJ0WV5CMG7JVVN44
 Base32Crockford Decoded (Serial): Hello, World! It is just wonderful to see you!
+Base36 Encoded (Serial): 91IMOR3F5GG5ERRIDHI22829EGG6ISP0D9QN6T10ETNMSP35E9J7AR10EHNI0SR5CKG7IRRL44
+Base36 Decoded (Serial): Hello, World! It is just wonderful to see you!
 Base64 Encoded (Serial): SGVsbG8sIFdvcmxkISBJdCBpcyBqdXN0IHdvbmRlcmZ1bCB0byBzZWUgeW91IQ
 Base64 Decoded (Serial): Hello, World! It is just wonderful to see you!
 
@@ -93,6 +95,8 @@ Base32Hex Encoded (Binary): 91IMOR3F5GG5ERRIDHI22
 Base32Hex Decoded (Binary - ASCII): 48 65 6c 6c 6f 2c 20 57 6f 72 6c 64 21  | Hello, World!
 Base32Crockford Encoded (Binary): 91JPRV3F5GG5EVVJDHJ22
 Base32Crockford Decoded (Binary - ASCII): 48 65 6c 6c 6f 2c 20 57 6f 72 6c 64 21  | Hello, World!
+Base36 Encoded (Binary): 91IMOR3F5GG5ERRIDHI22
+Base36 Decoded (Binary - ASCII): 48 65 6c 6c 6f 2c 20 57 6f 72 6c 64 21  | Hello, World!
 Base64 Encoded (Binary): SGVsbG8sIFdvcmxkIQ
 Base64 Decoded (Binary - ASCII): 48 65 6c 6c 6f 2c 20 57 6f 72 6c 64 21  | Hello, World!
 Program ended with exit code: 0

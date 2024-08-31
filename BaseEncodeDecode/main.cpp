@@ -56,6 +56,12 @@ void StringDemo() {
     std::cout << "Base32Crockford Encoded (Serial): " << encodedBase32Crockford << std::endl;
     std::cout << "Base32Crockford Decoded (Serial): " << decodedBase32Crockford << std::endl;
 
+    // Base36 Encoding/Decoding
+    std::string encodedBase36 = EncodeBase36(data);
+    std::string decodedBase36 = DecodeBase36(encodedBase36);
+    std::cout << "Base36 Encoded (Serial): " << encodedBase36 << std::endl;
+    std::cout << "Base36 Decoded (Serial): " << decodedBase36 << std::endl;
+    
     // Base64 Encoding/Decoding
     std::string encodedBase64 = EncodeBase64(data);
     std::string decodedBase64 = DecodeBase64(encodedBase64);
@@ -134,6 +140,13 @@ void BinaryDemo() {
     std::cout << "Base32Crockford Decoded (Binary - ASCII): ";
     printBinaryData(decodedBase32Crockford);
 
+    // Base36 Encoding/Decoding
+    std::string encodedBase36 = EncodeBase36Binary(data);
+    Binary decodedBase36 = DecodeBase36Binary(encodedBase36);
+    std::cout << "Base36 Encoded (Binary): " << encodedBase36 << std::endl;
+    std::cout << "Base36 Decoded (Binary - ASCII): ";
+    printBinaryData(decodedBase36);
+    
     // Base64 Encoding/Decoding
     std::string encodedBase64 = EncodeBase64Binary(data);
     Binary decodedBase64 = DecodeBase64Binary(encodedBase64);
