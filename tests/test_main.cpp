@@ -28,7 +28,31 @@
 #include <vector>
 
 #include "encode_decode_base_whatever.hpp"
+#include "encode_decode_bitstring.hpp" // no-op on platforms without <bitstring.h>
+#include "encode_decode_bitset.hpp"
+#include "encode_decode_stream.hpp"
+#include "encode_decode_mmap.hpp"
+#include "encode_decode_dna.hpp"
+#include "encode_decode_object.hpp"
+#include "utils/stl_support.hpp"
+#include "encode_decode_web.hpp"
 #include "base64.h" // ReneNyffenegger/cpp-base64 reference implementation
+
+#include <filesystem>
+#include <fstream>
+
+#include <version>
+#if defined(__cpp_lib_format)
+#include "encode_decode_format.hpp"
+#define TEST_FORMAT_ADAPTER 1
+#endif
+
+#if __has_include(<nlohmann/json.hpp>)
+#include "encode_decode_json.hpp"
+#define TEST_JSON_ADAPTER 1
+#endif
+
+#include <sstream>
 
 using namespace snicholls;
 
@@ -66,6 +90,26 @@ static_assert(DecodeBase2("01000001") == "A");
 static_assert(EncodeBase64(std::string_view{"foo"}) == "Zm9v");
 static_assert(EncodeBase64(std::array<uint8_t, 3>{'f', 'o', 'o'}) == "Zm9v");
 
+// RFC 4648 section 5: URL-safe alphabet, plus the unpadded (JWT-style) variant
+static_assert(EncodeBase64Url("f") == "Zg==");
+static_assert(EncodeBase64UrlNoPad("f") == "Zg");
+static_assert(EncodeBase64("\xff\xef\xbe") == "/+++");
+static_assert(EncodeBase64Url("\xff\xef\xbe") == "_---");
+static_assert(DecodeBase64Url("_---") == "\xff\xef\xbe");
+static_assert(DecodeBase64UrlNoPad("_---") == "\xff\xef\xbe");
+
+// Long-input vectors, verified against the system base64/xxd tools. The same
+// strings are asserted at runtime below, pinning the runtime path (block
+// scalar or SIMD) to the constexpr path, which is an independent
+// implementation of the codec.
+constexpr const char* kLongText = "The quick brown fox jumps over the lazy dog, 0123456789!";
+constexpr const char* kLongText64 = "VGhlIHF1aWNrIGJyb3duIGZveCBqdW1wcyBvdmVyIHRoZSBsYXp5IGRvZywgMDEyMzQ1Njc4OSE=";
+constexpr const char* kLongText16 = "54686520717569636B2062726F776E20666F78206A756D7073206F76657220746865206C617A7920646F672C203031323334353637383921";
+static_assert(EncodeBase64(kLongText) == kLongText64);
+static_assert(EncodeBase16(kLongText) == kLongText16);
+static_assert(DecodeBase64(kLongText64) == kLongText);
+static_assert(DecodeBase16(kLongText16) == kLongText);
+
 #ifdef SNICHOLLS_HAS_BITSTRING
 constexpr bool BitstringCompileTimeCheck() {
     const bitstr_t bits[1] = {0x05}; // logical bits: 1, 0, 1
@@ -73,6 +117,23 @@ constexpr bool BitstringCompileTimeCheck() {
 }
 static_assert(BitstringCompileTimeCheck());
 #endif
+
+// The std::bitset adapter encodes in the same logical order, at compile time
+static_assert(EncodeBase2Bitset(std::bitset<3>{0b101}) == "101");
+static_assert(EncodeBase64Bitset(std::bitset<1>{1}).length() == 4); // padded
+
+// DNA/RNA packing is constexpr. "ACGT" packs to one byte 0b00_01_10_11 = 0x1B
+constexpr bool DnaCompileTimeCheck() {
+    const Binary packed = PackDna("ACGT");
+    return packed.size() == 1 && packed[0] == 0x1B && UnpackDna(packed, 4) == "ACGT";
+}
+static_assert(DnaCompileTimeCheck());
+
+// Object serialization round-trips a scalar at compile time
+constexpr bool ObjectCompileTimeCheck() {
+    return DecodeBase64Object<uint32_t>(EncodeBase64Object<uint32_t>(0x1234ABCDu)) == 0x1234ABCDu;
+}
+static_assert(ObjectCompileTimeCheck());
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -153,6 +214,8 @@ struct Scheme {
 
 static const Scheme kSchemes[] = {
     SCHEME(Base64, 4),
+    SCHEME(Base64Url, 4),
+    SCHEME(Base64UrlNoPad, 0),
     SCHEME(Base32, 8),
     SCHEME(Base32Hex, 8),
     SCHEME(Base36, 0),
@@ -305,6 +368,629 @@ static void TestGenericInputs() {
     assert(DecodeBase64Binary(expected) == asBytes);
 
     std::puts("Generic ByteSource inputs: OK");
+}
+
+// ---------------------------------------------------------------------------
+// 4b. The runtime path (block scalar or SIMD) reproduces the known-answer
+//     vectors that the constexpr path proved at compile time, on inputs long
+//     enough to engage the vector kernels
+// ---------------------------------------------------------------------------
+static void TestRuntimeKnownAnswers() {
+    const std::string text = kLongText;
+    assert(EncodeBase64(text) == kLongText64);
+    assert(EncodeBase16(text) == kLongText16);
+    assert(DecodeBase64(std::string(kLongText64)) == text);
+    assert(DecodeBase16(std::string(kLongText16)) == text);
+    std::puts("Runtime path matches compile-time known answers: OK");
+}
+
+// ---------------------------------------------------------------------------
+// 4c. Base64Url: equivalent to Base64 modulo the two URL-safe characters;
+//     NoPad additionally drops the trailing '='
+// ---------------------------------------------------------------------------
+static void TestBase64Url() {
+    Rng rng;
+    for (size_t len = 0; len <= 128; ++len) {
+        const Binary data = rng.bytes(len);
+        std::string translated = EncodeBase64Binary(data);
+        for (auto& c : translated) {
+            if (c == '+') c = '-';
+            else if (c == '/') c = '_';
+        }
+        assert(EncodeBase64UrlBinary(data) == translated);
+
+        std::string noPad = translated;
+        while (!noPad.empty() && noPad.back() == '=') noPad.pop_back();
+        assert(EncodeBase64UrlNoPadBinary(data) == noPad);
+
+        assert(DecodeBase64UrlBinary(translated) == data);
+        assert(DecodeBase64UrlBinary(noPad) == data); // unpadded input accepted
+        assert(DecodeBase64UrlNoPadBinary(noPad) == data);
+    }
+
+    // Each alphabet rejects the other's special characters
+    AssertThrowsInvalidArgument([] { DecodeBase64Url("+A=="); });
+    AssertThrowsInvalidArgument([] { DecodeBase64("-A=="); });
+
+    std::puts("Base64Url / Base64UrlNoPad: OK");
+}
+
+#ifdef TEST_JSON_ADAPTER
+// ---------------------------------------------------------------------------
+// 4d. nlohmann::json adapter: Binary <-> Base64 string via adl_serializer
+// ---------------------------------------------------------------------------
+static void TestJsonAdapter() {
+    const Binary blob = {'H', 'e', 'l', 'l', 'o'};
+    nlohmann::json j;
+    j["payload"] = blob;
+    assert(j["payload"].is_string());
+    assert(j["payload"].get<std::string>() == "SGVsbG8=");
+    assert(j["payload"].get<Binary>() == blob);
+
+    // Survives a full dump/parse round trip
+    const auto parsed = nlohmann::json::parse(j.dump());
+    assert(parsed["payload"].get<Binary>() == blob);
+
+    // Tolerant reads: nlohmann's default array-of-numbers form and unpadded Base64
+    assert(nlohmann::json::parse("[72,101,108,108,111]").get<Binary>() == blob);
+    assert(nlohmann::json("SGVsbG8").get<Binary>() == blob);
+
+    // Wrong JSON types are rejected with nlohmann's own exception
+    bool threw = false;
+    try {
+        (void)nlohmann::json(42).get<Binary>();
+    } catch (const nlohmann::json::type_error&) {
+        threw = true;
+    }
+    assert(threw);
+    (void)threw;
+
+    std::puts("nlohmann::json adapter (Binary <-> Base64): OK");
+}
+#endif
+
+// ---------------------------------------------------------------------------
+// 4e. std::bitset adapter: round trips for every scheme at several widths,
+//     logical bit order, trimming, and (on BSD) agreement with bitstring.h
+// ---------------------------------------------------------------------------
+#define BITSET_ROUND_TRIP(Name, BitGroupSize, AlphabetSize, Alphabet, Padded) \
+    assert((Decode##Name##Bitset<NBits>(Encode##Name##Bitset(bits)) == bits));
+
+template<size_t NBits>
+static void BitsetRoundTripAllSchemes(Rng& rng) {
+    std::bitset<NBits> bits;
+    for (size_t i = 0; i < NBits; ++i) {
+        if (rng.next() & 1) {
+            bits.set(i);
+        }
+    }
+    SNICHOLLS_FOR_EACH_SCHEME(BITSET_ROUND_TRIP)
+
+#ifdef SNICHOLLS_HAS_BITSTRING
+    // Same logical order as the bitstring.h adapter: identical encodings
+    std::vector<bitstr_t> raw(bitstr_size(NBits) + 1, 0);
+    for (size_t i = 0; i < NBits; ++i) {
+        if (bits[i]) {
+            bit_set(raw.data(), i);
+        }
+    }
+    assert(EncodeBase64Bitset(bits) == EncodeBase64Bitstring(raw.data(), NBits));
+    assert(EncodeBase2Bitset(bits) == EncodeBase2Bitstring(raw.data(), NBits));
+#endif
+}
+#undef BITSET_ROUND_TRIP
+
+static void TestBitset() {
+    Rng rng;
+    BitsetRoundTripAllSchemes<1>(rng);
+    BitsetRoundTripAllSchemes<5>(rng);
+    BitsetRoundTripAllSchemes<8>(rng);
+    BitsetRoundTripAllSchemes<12>(rng);
+    BitsetRoundTripAllSchemes<64>(rng);
+    BitsetRoundTripAllSchemes<100>(rng);
+
+    // Logical order: bit 0 first; decoding into a wider bitset zero-fills
+    std::bitset<3> small{0b101};
+    assert(EncodeBase2Bitset(small) == "101");
+    const auto wide = DecodeBase2Bitset<8>("101");
+    assert(wide[0] && !wide[1] && wide[2]);
+    for (size_t i = 3; i < 8; ++i) assert(!wide[i]);
+
+    AssertThrowsInvalidArgument([] { DecodeBase64Bitset<8>("Zg==Zg=="); });
+    AssertThrowsInvalidArgument([] { DecodeBase2Bitset<8>("012"); });
+
+    std::puts("std::bitset adapter: OK");
+}
+
+// ---------------------------------------------------------------------------
+// 4f. Streaming adapter: any chunking of the input produces exactly the
+//     one-shot result, in both directions, including padding split across
+//     chunk boundaries
+// ---------------------------------------------------------------------------
+template<size_t BitGroupSize, size_t AlphabetSize, const std::array<char, AlphabetSize>& Alphabet, bool Padded>
+static void StreamRoundTrip(std::string (*oneShotEncode)(const Binary&)) {
+    Rng rng;
+    const size_t totals[] = {0, 1, 2, 3, 5, 16, 47, 48, 49, 1000, 4099};
+    const size_t chunks[] = {1, 2, 3, 7, 64, 1024};
+
+    for (size_t total : totals) {
+        const Binary data = rng.bytes(total);
+        const std::string expected = oneShotEncode(data);
+
+        for (size_t chunk : chunks) {
+            BaseStreamEncoder<BitGroupSize, AlphabetSize, Alphabet, Padded> encoder;
+            std::string encoded;
+            for (size_t pos = 0; pos < data.size(); pos += chunk) {
+                const size_t n = std::min(chunk, data.size() - pos);
+                encoded += encoder.Update(std::span<const uint8_t>(data.data() + pos, n));
+            }
+            encoded += encoder.Finish();
+            assert(encoded == expected);
+
+            BaseStreamDecoder<BitGroupSize, AlphabetSize, Alphabet, Padded> decoder;
+            Binary decoded;
+            for (size_t pos = 0; pos < expected.size(); pos += chunk) {
+                const size_t n = std::min(chunk, expected.size() - pos);
+                const Binary piece = decoder.Update(std::string_view(expected.data() + pos, n));
+                decoded.insert(decoded.end(), piece.begin(), piece.end());
+            }
+            const Binary tail = decoder.Finish();
+            decoded.insert(decoded.end(), tail.begin(), tail.end());
+            assert(decoded == data);
+        }
+    }
+}
+
+#define STREAM_ROUND_TRIP(Name, BitGroupSize, AlphabetSize, Alphabet, Padded) \
+    StreamRoundTrip<BitGroupSize, AlphabetSize, Alphabet, Padded>( \
+        +[](const Binary& b) { return Encode##Name##Binary(b); });
+
+static void TestStream() {
+    SNICHOLLS_FOR_EACH_SCHEME(STREAM_ROUND_TRIP)
+
+    // iostream convenience round trip
+    Rng rng;
+    const Binary data = rng.bytes(100003);
+    const std::string dataStr = ToString(data);
+
+    std::istringstream plainIn(dataStr);
+    std::ostringstream encodedOut;
+    EncodeBase64Stream(plainIn, encodedOut, 4096);
+    assert(encodedOut.str() == EncodeBase64Binary(data));
+
+    std::istringstream encodedIn(encodedOut.str());
+    std::ostringstream plainOut;
+    DecodeBase64Stream(encodedIn, plainOut, 4096);
+    assert(plainOut.str() == dataStr);
+
+    // Malformed input surfaces from Update, including '=' handled across chunks
+    {
+        Base64StreamDecoder decoder;
+        AssertThrowsInvalidArgument([&] { decoder.Update(std::string_view{"Zm9v!!!!"}); });
+    }
+    {
+        Base64StreamDecoder decoder;
+        (void)decoder.Update(std::string_view{"Zg=="});
+        AssertThrowsInvalidArgument([&] { decoder.Update(std::string_view{"Zg"}); });
+    }
+
+    std::puts("Streaming adapter: OK");
+}
+#undef STREAM_ROUND_TRIP
+
+#ifdef TEST_FORMAT_ADAPTER
+// ---------------------------------------------------------------------------
+// 4g. std::format adapter
+// ---------------------------------------------------------------------------
+static void TestFormatAdapter() {
+    const Binary blob = {'H', 'e', 'l', 'l', 'o'};
+    assert(std::format("{}", Encoded(blob)) == EncodeBase64Binary(blob));
+    assert(std::format("{:b64}", Encoded(blob)) == EncodeBase64Binary(blob));
+    assert(std::format("{:b64u}", Encoded(blob)) == EncodeBase64UrlBinary(blob));
+    assert(std::format("{:b64un}", Encoded(blob)) == EncodeBase64UrlNoPadBinary(blob));
+    assert(std::format("{:b32}", Encoded(blob)) == EncodeBase32Binary(blob));
+    assert(std::format("{:b16}", Encoded(blob)) == EncodeBase16Binary(blob));
+    assert(std::format("{:hex}", Encoded(blob)) == EncodeBase16Binary(blob));
+    assert(std::format("{:b2}", Encoded(blob)) == EncodeBase2Binary(blob));
+    assert(std::format("{}", Encoded("Hi")) == "SGk=");
+
+    // Unknown specs are rejected (at runtime through vformat; at compile
+    // time when the format string is a literal)
+    bool threw = false;
+    try {
+        const Encoded value(blob);
+        (void)std::vformat("{:nope}", std::make_format_args(value));
+    } catch (const std::format_error&) {
+        threw = true;
+    }
+    assert(threw);
+    (void)threw;
+
+    std::puts("std::format adapter: OK");
+}
+#endif
+
+// ---------------------------------------------------------------------------
+// 4i. mmap adapter: whole-file encode/decode with zero-copy on both ends,
+//     plus MappedFile as a ByteSource, over several sizes incl. empty
+// ---------------------------------------------------------------------------
+namespace {
+    // RAII scratch directory under the system temp location
+    struct ScratchDir {
+        std::filesystem::path dir;
+        ScratchDir() {
+            const auto base = std::filesystem::temp_directory_path();
+            for (unsigned n = 0; ; ++n) {
+                auto candidate = base / ("bed_mmap_test_" + std::to_string(n));
+                std::error_code ec;
+                if (std::filesystem::create_directory(candidate, ec)) {
+                    dir = candidate;
+                    return;
+                }
+            }
+        }
+        ~ScratchDir() {
+            std::error_code ec;
+            std::filesystem::remove_all(dir, ec);
+        }
+        std::string path(const char* name) const { return (dir / name).string(); }
+    };
+
+    void WriteFile(const std::string& path, const Binary& data) {
+        std::ofstream out(path, std::ios::binary);
+        out.write(reinterpret_cast<const char*>(data.data()), static_cast<std::streamsize>(data.size()));
+    }
+    Binary ReadFile(const std::string& path) {
+        std::ifstream in(path, std::ios::binary);
+        return Binary(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+    }
+}
+
+static void TestMmap() {
+    ScratchDir scratch;
+    Rng rng;
+    const size_t sizes[] = {0, 1, 2, 3, 47, 48, 49, 4096, (size_t{1} << 20) + 3};
+
+    for (size_t size : sizes) {
+        const Binary data = rng.bytes(size);
+        const std::string rawPath = scratch.path("raw.bin");
+        const std::string encPath = scratch.path("enc.b64");
+        const std::string outPath = scratch.path("out.bin");
+        WriteFile(rawPath, data);
+
+        // Whole-file encode: output must match the in-memory encoder exactly
+        EncodeBase64File(rawPath, encPath);
+        const Binary encoded = ReadFile(encPath);
+        assert(ToString(encoded) == EncodeBase64Binary(data));
+
+        // Whole-file decode straight back into a mapped output file
+        DecodeBase64File(encPath, outPath);
+        assert(ReadFile(outPath) == data);
+
+        // MappedFile is a ByteSource: feed it to the in-memory API zero-copy
+        MappedFile mapped(rawPath);
+        assert(mapped.size() == size);
+        assert(EncodeBase64Parallel(mapped) == EncodeBase64Binary(data));
+        assert(EncodeBase16(mapped) == EncodeBase16Binary(data));
+    }
+
+    // A different scheme end to end, and the forced-thread path
+    {
+        const Binary data = rng.bytes(500000);
+        const std::string rawPath = scratch.path("raw32.bin");
+        const std::string encPath = scratch.path("enc32.b32");
+        const std::string outPath = scratch.path("out32.bin");
+        WriteFile(rawPath, data);
+        EncodeBase32File(rawPath, encPath, 3);
+        assert(ToString(ReadFile(encPath)) == EncodeBase32Binary(data));
+        DecodeBase32File(encPath, outPath, 3);
+        assert(ReadFile(outPath) == data);
+    }
+
+    // Malformed encoded input is rejected by the file decoder
+    {
+        const std::string badPath = scratch.path("bad.b64");
+        const std::string outPath = scratch.path("bad.out");
+        WriteFile(badPath, Binary{'Z', 'm', '9', 'v', '!', '!', '!', '!'});
+        AssertThrowsInvalidArgument([&] { DecodeBase64File(badPath, outPath); });
+    }
+
+    std::puts("mmap adapter (zero-copy file encode/decode): OK");
+}
+
+// ---------------------------------------------------------------------------
+// 4j. DNA/RNA packing: 2-bit (canonical) and 4-bit (IUPAC) codecs
+// ---------------------------------------------------------------------------
+static void TestDna() {
+    // Known-answer packings (bit layout is stable and documented)
+    assert(PackDna("ACGT") == (Binary{0x1B}));      // 00 01 10 11
+    assert(PackDna("AAAA") == (Binary{0x00}));
+    assert(PackDna("TTTT") == (Binary{0xFF}));
+    assert(PackDnaIupac("AC") == (Binary{0x12}));   // BAM nibbles A=1, C=2
+    assert(PackDnaIupac("N") == (Binary{0xF0}));    // N=15 in the high nibble
+
+    // Compression ratios
+    assert(PackDna(std::string(64, 'A')).size() == 16);       // 4x
+    assert(PackDnaIupac(std::string(64, 'A')).size() == 32);  // 2x
+    assert(PackedDnaSize(7) == 2 && PackedDnaIupacSize(7) == 4);
+
+    // Case folding: lowercase accepted, not preserved
+    assert(PackDna("acgt") == PackDna("ACGT"));
+    assert(UnpackDna(PackDna("acgt"), 4) == "ACGT");
+
+    // Partial final byte: length is required to trim the padding bits
+    assert(PackDna("ACG").size() == 1);
+    assert(UnpackDna(PackDna("ACG"), 3) == "ACG");
+    assert(UnpackDna(PackDna("ACG")) == "ACGA"); // no length -> trailing pad base shows
+
+    // RNA uses U; the two alphabets reject each other's odd base out
+    assert(UnpackRna(PackRna("ACGU"), 4) == "ACGU");
+    AssertThrowsInvalidArgument([] { (void)PackRna("ACGT"); }); // T not in RNA
+    AssertThrowsInvalidArgument([] { (void)PackDna("ACGU"); }); // U not in DNA
+
+    // 2-bit rejects anything non-canonical; 4-bit accepts the IUPAC set
+    AssertThrowsInvalidArgument([] { (void)PackDna("ACGTN"); });   // N needs 4-bit
+    AssertThrowsInvalidArgument([] { (void)PackDna("ACGT-"); });   // gap
+    AssertThrowsInvalidArgument([] { (void)PackDnaIupac("ACGT$"); }); // '$' still invalid
+    assert(UnpackDnaIupac(PackDnaIupac("ACGTNRYSWKMBDHV"), 15) == "ACGTNRYSWKMBDHV");
+
+    // Empty input
+    assert(PackDna("").empty());
+    assert(UnpackDna(Binary{}) == "");
+
+    // Randomised round trips for all four codecs at many lengths
+    Rng rng;
+    const char* dnaBases = "ACGT";
+    const char* rnaBases = "ACGU";
+    const char* iupacBases = "ACGTNRYSWKMBDHV";
+    const char* iupacRnaBases = "ACGUNRYSWKMBDHV";
+    for (size_t len = 0; len <= 130; ++len) {
+        std::string dna, rna, dnaI, rnaI;
+        for (size_t i = 0; i < len; ++i) {
+            dna += dnaBases[rng.next() % 4];
+            rna += rnaBases[rng.next() % 4];
+            dnaI += iupacBases[rng.next() % 15];
+            rnaI += iupacRnaBases[rng.next() % 15];
+        }
+        assert(UnpackDna(PackDna(dna), len) == dna);
+        assert(UnpackRna(PackRna(rna), len) == rna);
+        assert(UnpackDnaIupac(PackDnaIupac(dnaI), len) == dnaI);
+        assert(UnpackRnaIupac(PackRnaIupac(rnaI), len) == rnaI);
+    }
+
+    // Composes with the rest of the library: pack, then Base64 for transport
+    {
+        const std::string seq = "ACGTACGTACGTACGT";
+        const Binary packed = PackDna(seq);
+        const std::string transported = EncodeBase64Binary(packed);
+        const Binary recovered = DecodeBase64Binary(transported);
+        assert(UnpackDna(recovered, seq.size()) == seq);
+    }
+
+    std::puts("DNA/RNA packing (2-bit + 4-bit IUPAC): OK");
+}
+
+// ---------------------------------------------------------------------------
+// 4k. Object serialization: trivially-copyable types <-> base-N and back
+// ---------------------------------------------------------------------------
+namespace {
+    enum class Colour : uint16_t { Red = 1, Green = 2, Blue = 0xBEEF };
+    struct Record {
+        uint32_t id;
+        double score;
+        char tag;
+        Colour colour;
+        std::array<uint8_t, 3> rgb;
+        bool operator==(const Record&) const = default;
+    };
+
+    // A non-trivially-copyable type (owns a std::string). With no serializer
+    // specialization it must NOT be ObjectSerializable.
+    struct Widget {
+        std::string label;
+        int weight;
+    };
+
+    // A user type made serializable via a custom specialization below.
+    struct Person {
+        std::string name;
+        uint32_t age;
+        bool operator==(const Person&) const = default;
+    };
+}
+
+namespace snicholls {
+    // User-provided serializer for a non-trivially-copyable type: length-prefixed
+    // name, then the age. Demonstrates the extension mechanism.
+    template<>
+    struct ObjectSerializer<Person> {
+        static Binary to_bytes(const Person& p) {
+            Binary out = ToBytes(static_cast<uint32_t>(p.name.size()));
+            out.insert(out.end(), p.name.begin(), p.name.end());
+            const Binary age = ToBytes(p.age);
+            out.insert(out.end(), age.begin(), age.end());
+            return out;
+        }
+        static Person from_bytes(std::span<const uint8_t> b) {
+            const uint32_t n = FromBytes<uint32_t>(b.subspan(0, 4));
+            Person p;
+            p.name.assign(b.begin() + 4, b.begin() + 4 + n);
+            p.age = FromBytes<uint32_t>(b.subspan(4 + n, 4));
+            return p;
+        }
+    };
+}
+
+static void TestObject() {
+    // Scalars round-trip through several schemes
+    assert(DecodeBase64Object<uint32_t>(EncodeBase64Object<uint32_t>(0xDEADBEEFu)) == 0xDEADBEEFu);
+    assert(DecodeBase32Object<int64_t>(EncodeBase32Object<int64_t>(-123456789)) == -123456789);
+    assert(DecodeBase16Object<double>(EncodeBase16Object<double>(3.14159)) == 3.14159);
+    assert(DecodeBase64Object<Colour>(EncodeBase64Object<Colour>(Colour::Blue)) == Colour::Blue);
+
+    // A POD struct round-trips, all bytes preserved
+    const Record rec{42, 9.81, 'Z', Colour::Green, {{10, 20, 30}}};
+    const std::string encoded = EncodeBase64Object(rec);
+    assert(DecodeBase64Object<Record>(encoded) == rec);
+    assert(DecodeBase32Object<Record>(EncodeBase32Object(rec)) == rec);
+    assert(DecodeBase64UrlObject<Record>(EncodeBase64UrlObject(rec)) == rec);
+
+    // Fixed-size arrays (extra parens so the ',' in the template arg is not
+    // mistaken for a second assert() macro argument)
+    const std::array<int, 4> arr{{-1, 0, 7, 1000000}};
+    assert((DecodeBase64Object<std::array<int, 4>>(EncodeBase64Object(arr)) == arr));
+
+    // The encoding is exactly the encoding of the object's bytes
+    assert(EncodeBase64Object(rec) == EncodeBase64Binary(ToBytes(rec)));
+    assert(FromBytes<Record>(ToBytes(rec)) == rec);
+
+    // Decoding into the wrong type is caught by the size check
+    const std::string eightBytes = EncodeBase64Object<uint64_t>(1);
+    AssertThrowsInvalidArgument([&] { (void)DecodeBase64Object<uint32_t>(eightBytes); });
+
+    // Built-in specialization: std::string <-> its content bytes
+    assert(DecodeBase64Object<std::string>(EncodeBase64Object(std::string("hello, world"))) == "hello, world");
+    assert(DecodeBase64Object<std::string>(EncodeBase64Object(std::string{})).empty());
+
+    // Built-in specialization: std::vector<trivially-copyable>
+    const std::vector<int> vi{1, 2, 3, -4, 5};
+    assert(DecodeBase64Object<std::vector<int>>(EncodeBase64Object(vi)) == vi);
+    const std::vector<double> vd{1.5, -2.5, 3.25};
+    assert(DecodeBase32Object<std::vector<double>>(EncodeBase32Object(vd)) == vd);
+    const Binary bin{9, 8, 7, 6};
+    assert(DecodeBase64Object<Binary>(EncodeBase64Object(bin)) == bin);
+    // Wrong-sized byte stream for the element type is rejected
+    AssertThrowsInvalidArgument([] { (void)DecodeBase64Object<std::vector<int>>(EncodeBase64Binary(Binary(5))); });
+
+    // User-provided specialization makes a non-trivial type serializable
+    const Person person{"Ada Lovelace", 36};
+    assert(DecodeBase64Object<Person>(EncodeBase64Object(person)) == person);
+    assert(DecodeBase32Object<Person>(EncodeBase32Object(person)) == person);
+
+    // The concept gates correctly: trivially-copyable, string, vector and the
+    // specialized Person qualify (and, with stl_support included, so do nested
+    // containers); a type with no specialization does not, nor a container of it.
+    static_assert(ObjectSerializable<uint32_t>);
+    static_assert(ObjectSerializable<Record>);
+    static_assert(ObjectSerializable<std::string>);
+    static_assert(ObjectSerializable<std::vector<double>>);
+    static_assert(ObjectSerializable<std::vector<std::string>>);   // composes recursively
+    static_assert(ObjectSerializable<Person>);
+    static_assert(!ObjectSerializable<Widget>);                    // no specialization
+    static_assert(!ObjectSerializable<std::vector<Widget>>);       // container of a non-serializable type
+
+    std::puts("Object serialization (trait-based, extensible): OK");
+}
+
+// ---------------------------------------------------------------------------
+// 4k-stl. STL container serialization (utils/stl_support.hpp): every family,
+//         plus deep nesting and user types composing into containers
+// ---------------------------------------------------------------------------
+static void TestStlSupport() {
+    // Sequence containers
+    assert((DecodeBase64Object<std::deque<int>>(EncodeBase64Object(std::deque<int>{1, 2, 3})) == std::deque<int>{1, 2, 3}));
+    assert((DecodeBase64Object<std::list<std::string>>(EncodeBase64Object(std::list<std::string>{"a", "bb", "ccc"}))
+            == std::list<std::string>{"a", "bb", "ccc"}));
+    assert((DecodeBase64Object<std::forward_list<int>>(EncodeBase64Object(std::forward_list<int>{5, 6, 7}))
+            == std::forward_list<int>{5, 6, 7}));
+    assert((DecodeBase64Object<std::array<std::string, 2>>(EncodeBase64Object(std::array<std::string, 2>{{"x", "yy"}}))
+            == std::array<std::string, 2>{{"x", "yy"}}));
+
+    // Associative + unordered
+    assert((DecodeBase64Object<std::set<int>>(EncodeBase64Object(std::set<int>{3, 1, 2})) == std::set<int>{1, 2, 3}));
+    assert((DecodeBase64Object<std::multiset<int>>(EncodeBase64Object(std::multiset<int>{1, 1, 2}))
+            == std::multiset<int>{1, 1, 2}));
+    const std::map<std::string, int> m{{"one", 1}, {"two", 2}};
+    assert((DecodeBase64Object<std::map<std::string, int>>(EncodeBase64Object(m)) == m));
+    const std::unordered_map<int, std::string> um{{1, "a"}, {2, "b"}};
+    assert((DecodeBase64Object<std::unordered_map<int, std::string>>(EncodeBase64Object(um)) == um));
+    const std::unordered_set<int> us{1, 2, 3};
+    assert(DecodeBase64Object<std::unordered_set<int>>(EncodeBase64Object(us)) == us);
+
+    // Utility types
+    const std::pair<std::string, int> pr{"key", 42};
+    assert((DecodeBase64Object<std::pair<std::string, int>>(EncodeBase64Object(pr)) == pr));
+    const std::tuple<int, std::string, double> tp{7, "mid", 1.5};
+    assert((DecodeBase64Object<std::tuple<int, std::string, double>>(EncodeBase64Object(tp)) == tp));
+    const std::optional<std::string> opt{"here"};
+    assert((DecodeBase64Object<std::optional<std::string>>(EncodeBase64Object(opt)) == opt));
+    assert((DecodeBase64Object<std::optional<std::string>>(EncodeBase64Object(std::optional<std::string>{})).has_value() == false));
+    std::variant<int, std::string, double> var{std::string("v")};
+    assert((DecodeBase64Object<std::variant<int, std::string, double>>(EncodeBase64Object(var)) == var));
+    var = 99;
+    assert((DecodeBase64Object<std::variant<int, std::string, double>>(EncodeBase64Object(var)) == var));
+
+    // Adaptors
+    std::stack<int> stk;
+    stk.push(1); stk.push(2); stk.push(3);
+    assert(DecodeBase64Object<std::stack<int>>(EncodeBase64Object(stk)) == stk);
+    std::queue<std::string> q;
+    q.push("first"); q.push("second");
+    assert(DecodeBase64Object<std::queue<std::string>>(EncodeBase64Object(q)) == q);
+    std::priority_queue<int> pq;
+    pq.push(3); pq.push(1); pq.push(4); pq.push(1);
+    auto pq2 = DecodeBase64Object<std::priority_queue<int>>(EncodeBase64Object(pq));
+    assert(pq2.size() == pq.size() && pq2.top() == 4);
+
+    // Deep nesting: map<string, vector<pair<int,string>>>
+    using Deep = std::map<std::string, std::vector<std::pair<int, std::string>>>;
+    const Deep deep{
+        {"alpha", {{1, "one"}, {2, "two"}}},
+        {"beta", {{3, "three"}}},
+    };
+    assert(DecodeBase32Object<Deep>(EncodeBase32Object(deep)) == deep);
+
+    // A user type composes into containers automatically
+    const std::vector<Person> people{{"Ada", 36}, {"Alan", 41}};
+    assert(DecodeBase64Object<std::vector<Person>>(EncodeBase64Object(people)) == people);
+    const std::map<std::string, Person> byName{{"a", {"Ada", 36}}};
+    assert((DecodeBase64Object<std::map<std::string, Person>>(EncodeBase64Object(byName)) == byName));
+
+    std::puts("STL container serialization (nested, all families): OK");
+}
+
+// ---------------------------------------------------------------------------
+// 4h. Web adapter: data URIs and HTTP Basic auth
+// ---------------------------------------------------------------------------
+static void TestWebAdapter() {
+    const Binary blob = {'H', 'e', 'l', 'l', 'o'};
+
+    // Data URIs
+    const std::string uri = MakeDataUri("image/png", blob);
+    assert(uri == "data:image/png;base64,SGVsbG8=");
+    const DataUri parsed = ParseDataUri(uri);
+    assert(parsed.mediaType == "image/png");
+    assert(parsed.base64);
+    assert(parsed.data == blob);
+
+    assert(MakeDataUri("", blob).starts_with("data:application/octet-stream;base64,"));
+
+    const DataUri plain = ParseDataUri("data:,Hello");
+    assert(plain.mediaType == "text/plain;charset=US-ASCII");
+    assert(!plain.base64);
+    assert(plain.data == blob);
+
+    bool threw = false;
+    try { (void)ParseDataUri("https://example.com"); } catch (const std::invalid_argument&) { threw = true; }
+    assert(threw);
+    threw = false;
+    try { (void)ParseDataUri("data:no-comma-here"); } catch (const std::invalid_argument&) { threw = true; }
+    assert(threw);
+    (void)threw;
+
+    // HTTP Basic auth - the canonical RFC 7617 example
+    assert(BasicAuthHeader("Aladdin", "open sesame") == "Basic QWxhZGRpbjpvcGVuIHNlc2FtZQ==");
+    const BasicCredentials creds = ParseBasicAuthHeader("Basic QWxhZGRpbjpvcGVuIHNlc2FtZQ==");
+    assert(creds.user == "Aladdin");
+    assert(creds.password == "open sesame");
+
+    // Scheme name is case-insensitive; password may contain ':'
+    assert(ParseBasicAuthHeader(BasicAuthHeader("u", "a:b:c")).password == "a:b:c");
+    assert(ParseBasicAuthHeader("bASIC QWxhZGRpbjpvcGVuIHNlc2FtZQ==").user == "Aladdin");
+
+    AssertThrowsInvalidArgument([] { (void)BasicAuthHeader("user:name", "pw"); });
+
+    std::puts("Web adapter (data URIs, Basic auth): OK");
 }
 
 // ---------------------------------------------------------------------------
@@ -467,10 +1153,33 @@ static void TestBitstring() {
 
 // ---------------------------------------------------------------------------
 int main() {
+#if defined(SNICHOLLS_SIMD_INTEL)
+    std::puts("SIMD: Intel SSSE3 kernels active");
+#elif defined(SNICHOLLS_SIMD_ARM)
+    std::puts("SIMD: ARM NEON kernels active");
+#else
+    std::puts("SIMD: disabled (scalar path)");
+#endif
+
     TestRfc4648Vectors();
     TestPaddingShape();
     TestRoundTrips();
     TestGenericInputs();
+    TestRuntimeKnownAnswers();
+    TestBase64Url();
+    TestBitset();
+    TestStream();
+    TestMmap();
+    TestDna();
+    TestObject();
+    TestStlSupport();
+#ifdef TEST_FORMAT_ADAPTER
+    TestFormatAdapter();
+#endif
+    TestWebAdapter();
+#ifdef TEST_JSON_ADAPTER
+    TestJsonAdapter();
+#endif
     TestParallelMatchesSerial();
     TestAgainstCppBase64();
     TestInvalidInput();

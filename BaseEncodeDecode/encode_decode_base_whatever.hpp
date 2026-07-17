@@ -23,11 +23,6 @@
 #include <type_traits>
 #include <vector>
 
-#if __has_include(<bitstring.h>)
-#include <bitstring.h>
-#define SNICHOLLS_HAS_BITSTRING 1
-#endif
-
 #include "alphabet.hpp"
 
 // Define Binary as a type alias for std::vector<uint8_t>
@@ -82,16 +77,49 @@ namespace snicholls {
         // Below this input size the auto-threaded parallel functions stay serial
         inline constexpr size_t ParallelMinBytes = size_t{1} << 20;
 
+        // Optional SIMD acceleration. The per-architecture drop-in headers
+        // (encode_decode_simd_intel.hpp / encode_decode_simd_arm.hpp, included
+        // below unless SNICHOLLS_NO_SIMD is defined) specialize this for the
+        // alphabets they accelerate. The primary template means "no
+        // acceleration here - use the scalar path". Kernels advance first/out
+        // past the data they handled and leave the remainder (tails, or
+        // anything after a suspect character) to the scalar code.
+        template<size_t AlphabetSize, const std::array<char, AlphabetSize>& Alphabet>
+        struct SimdCodec {
+            static constexpr bool Available = false;
+        };
+
         // Encode bytes [first, last) into out; returns one past the last char written.
         // first must sit on a block boundary of the overall input.
         template<size_t BitGroupSize, size_t AlphabetSize, const std::array<char, AlphabetSize>& Alphabet>
         inline char* EncodeChunk(const uint8_t* first, const uint8_t* last, char* out) {
             constexpr size_t mask = (size_t{1} << BitGroupSize) - 1;
+            constexpr size_t blockBytes = BlockBytes<BitGroupSize>;
+            constexpr size_t blockChars = BlockChars<BitGroupSize>;
+
+            if constexpr (SimdCodec<AlphabetSize, Alphabet>::Available) {
+                SimdCodec<AlphabetSize, Alphabet>::Encode(first, last, out);
+            }
+
+            // Whole blocks: no bit buffer carried between iterations; both
+            // fixed-count inner loops unroll completely
+            while (static_cast<size_t>(last - first) >= blockBytes) {
+                uint64_t word = 0;
+                for (size_t i = 0; i < blockBytes; ++i) {
+                    word = (word << 8) | first[i];
+                }
+                for (size_t i = 0; i < blockChars; ++i) {
+                    out[i] = Alphabet[(word >> ((blockChars - 1 - i) * BitGroupSize)) & mask];
+                }
+                first += blockBytes;
+                out += blockChars;
+            }
+
+            // Tail: fewer than blockBytes bytes remain
             size_t bitBuffer = 0;
             int bitBufferLength = 0;
-
-            for (const uint8_t* p = first; p != last; ++p) {
-                bitBuffer = (bitBuffer << 8) | *p;
+            for (; first != last; ++first) {
+                bitBuffer = (bitBuffer << 8) | *first;
                 bitBufferLength += 8;
 
                 while (bitBufferLength >= static_cast<int>(BitGroupSize)) {
@@ -99,7 +127,6 @@ namespace snicholls {
                     bitBufferLength -= BitGroupSize;
                 }
             }
-
             if (bitBufferLength > 0) {
                 *out++ = Alphabet[(bitBuffer << (BitGroupSize - bitBufferLength)) & mask];
             }
@@ -111,11 +138,39 @@ namespace snicholls {
         // range must not contain padding.
         template<size_t BitGroupSize, size_t AlphabetSize, const std::array<char, AlphabetSize>& Alphabet>
         inline uint8_t* DecodeChunk(const char* first, const char* last, uint8_t* out) {
+            constexpr size_t blockBytes = BlockBytes<BitGroupSize>;
+            constexpr size_t blockChars = BlockChars<BitGroupSize>;
+
+            if constexpr (SimdCodec<AlphabetSize, Alphabet>::Available) {
+                // Stops early at the vector containing any suspect character;
+                // the scalar code below re-examines it and throws precisely
+                SimdCodec<AlphabetSize, Alphabet>::Decode(first, last, out);
+            }
+
+            // Whole blocks, validation deferred to the end of each block
+            while (static_cast<size_t>(last - first) >= blockChars) {
+                uint64_t word = 0;
+                bool invalid = false;
+                for (size_t i = 0; i < blockChars; ++i) {
+                    const int index = ReverseTable<AlphabetSize, Alphabet>[static_cast<unsigned char>(first[i])];
+                    invalid = invalid || (index < 0);
+                    word = (word << BitGroupSize) | static_cast<uint8_t>(index);
+                }
+                if (invalid) {
+                    break; // the tail loop below throws at the exact character
+                }
+                for (size_t j = 0; j < blockBytes; ++j) {
+                    out[j] = static_cast<uint8_t>((word >> ((blockBytes - 1 - j) * 8)) & 0xFF);
+                }
+                first += blockChars;
+                out += blockBytes;
+            }
+
+            // Tail (or rescan of a block containing an invalid character)
             size_t bitBuffer = 0;
             int bitBufferLength = 0;
-
-            for (const char* p = first; p != last; ++p) {
-                int index = ReverseTable<AlphabetSize, Alphabet>[static_cast<unsigned char>(*p)];
+            for (; first != last; ++first) {
+                int index = ReverseTable<AlphabetSize, Alphabet>[static_cast<unsigned char>(*first)];
                 if (index < 0) {
                     throw std::invalid_argument("Invalid character in encoded string");
                 }
@@ -131,13 +186,58 @@ namespace snicholls {
             return out;
         }
 
+        // Build a string of exactly `size` characters, skipping the serial
+        // zero-fill that resize() performs when the library supports it
+        // (C++23 resize_and_overwrite; plain resize as the C++20 fallback)
+        template<typename Fill>
+        inline std::string MakeFilledString(size_t size, Fill&& fill) {
+#if defined(__cpp_lib_string_resize_and_overwrite)
+            std::string output;
+            output.resize_and_overwrite(size, [&](char* data, size_t n) {
+                fill(data);
+                return n;
+            });
+            return output;
+#else
+            std::string output;
+            output.resize(size);
+            fill(output.data());
+            return output;
+#endif
+        }
+
     } // namespace detail
+} // namespace snicholls (reopened below)
+
+// Architecture-specific SIMD drop-ins (each is a no-op on other architectures).
+// Define SNICHOLLS_NO_SIMD before including this header to stay purely scalar.
+#if !defined(SNICHOLLS_NO_SIMD)
+#include "encode_decode_simd_intel.hpp"
+#include "encode_decode_simd_arm.hpp"
+#endif
+
+namespace snicholls {
+
+    // Forward declarations: the constexpr front-ends below delegate to these
+    // chunked implementations at runtime (threadCount 1 = single-threaded)
+    template<size_t BitGroupSize, size_t AlphabetSize, const std::array<char, AlphabetSize>& Alphabet, bool PaddingRequired>
+    std::string BaseEncodeParallelBytes(const uint8_t* data, size_t size, unsigned threadCount = 0);
+
+    template<typename Container, size_t BitGroupSize, size_t AlphabetSize, const std::array<char, AlphabetSize>& Alphabet, bool PaddingRequired>
+    Container BaseDecodeParallelImpl(const char* data, size_t size, unsigned threadCount = 0);
 
     // Templated function for Base Encoding. Accepts any ByteSource and reads it
     // in place. constexpr: usable at compile time, e.g.
     //   static_assert(EncodeBase64("foo") == "Zm9v");
     template<size_t BitGroupSize, size_t AlphabetSize, const std::array<char, AlphabetSize>& Alphabet, bool PaddingRequired, ByteSource R>
     constexpr std::string BaseEncode(const R& input) {
+        if (!std::is_constant_evaluated()) {
+            // Runtime: block-unrolled chunk path with optional SIMD;
+            // threadCount 1 keeps this strictly single-threaded
+            return BaseEncodeParallelBytes<BitGroupSize, AlphabetSize, Alphabet, PaddingRequired>(
+                reinterpret_cast<const uint8_t*>(std::ranges::data(input)), std::ranges::size(input), 1);
+        }
+
         constexpr size_t mask = (size_t{1} << BitGroupSize) - 1;
         std::string output;
         size_t bitBuffer = 0;
@@ -177,6 +277,11 @@ namespace snicholls {
     // Templated function for Base Decoding (string version)
     template<size_t BitGroupSize, size_t AlphabetSize, const std::array<char, AlphabetSize>& Alphabet, bool PaddingRequired, ByteSource R>
     constexpr std::string BaseDecode(const R& input) {
+        if (!std::is_constant_evaluated()) {
+            return BaseDecodeParallelImpl<std::string, BitGroupSize, AlphabetSize, Alphabet, PaddingRequired>(
+                reinterpret_cast<const char*>(std::ranges::data(input)), std::ranges::size(input), 1);
+        }
+
         std::string output;
         size_t bitBuffer = 0;
         int bitBufferLength = 0;
@@ -214,6 +319,11 @@ namespace snicholls {
     // Templated function for Base Decoding (binary version)
     template<size_t BitGroupSize, size_t AlphabetSize, const std::array<char, AlphabetSize>& Alphabet, bool PaddingRequired, ByteSource R>
     constexpr Binary BaseDecodeBinary(const R& input) {
+        if (!std::is_constant_evaluated()) {
+            return BaseDecodeParallelImpl<Binary, BitGroupSize, AlphabetSize, Alphabet, PaddingRequired>(
+                reinterpret_cast<const char*>(std::ranges::data(input)), std::ranges::size(input), 1);
+        }
+
         Binary output;
         size_t bitBuffer = 0;
         int bitBufferLength = 0;
@@ -262,13 +372,33 @@ namespace snicholls {
     // threadCount forces that many threads (capped at one per block).
     // ------------------------------------------------------------------
 
+    // Number of encoded characters produced from `inputSize` raw bytes.
+    // Lets callers (e.g. the mmap adapter) size a destination file up front.
+    template<size_t BitGroupSize, bool PaddingRequired>
+    constexpr size_t EncodedLength(size_t inputSize) noexcept {
+        constexpr size_t blockBytes = detail::BlockBytes<BitGroupSize>;
+        constexpr size_t blockChars = detail::BlockChars<BitGroupSize>;
+        const size_t fullBlocks = inputSize / blockBytes;
+        const size_t tailBytes = inputSize - fullBlocks * blockBytes;
+        const size_t tailChars = (tailBytes * 8 + BitGroupSize - 1) / BitGroupSize;
+        size_t encodedLength = fullBlocks * blockChars + tailChars;
+        if (PaddingRequired && encodedLength % blockChars) {
+            encodedLength += blockChars - encodedLength % blockChars;
+        }
+        return encodedLength;
+    }
+
+    // Encode [data, data+size) into the caller-provided buffer outData, which
+    // must hold at least EncodedLength<BitGroupSize, PaddingRequired>(size)
+    // characters. Worker threads write disjoint slices, so outData may be a
+    // freshly mapped output file (the mmap adapter relies on this). No
+    // allocation and no zero-fill. threadCount 0 = auto.
     template<size_t BitGroupSize, size_t AlphabetSize, const std::array<char, AlphabetSize>& Alphabet, bool PaddingRequired>
-    std::string BaseEncodeParallelBytes(const uint8_t* data, size_t size, unsigned threadCount = 0) {
+    void BaseEncodeParallelInto(const uint8_t* data, size_t size, char* outData, unsigned threadCount = 0) {
         constexpr size_t blockBytes = detail::BlockBytes<BitGroupSize>;
         constexpr size_t blockChars = detail::BlockChars<BitGroupSize>;
 
-        const bool autoThreads = (threadCount == 0);
-        if (autoThreads) {
+        if (threadCount == 0) {
             threadCount = std::thread::hardware_concurrency();
             if (size < detail::ParallelMinBytes) {
                 threadCount = 1;
@@ -276,16 +406,7 @@ namespace snicholls {
         }
         const size_t fullBlocks = size / blockBytes;
         threadCount = static_cast<unsigned>(std::min<size_t>(std::max(threadCount, 1u), std::max<size_t>(fullBlocks, 1)));
-
-        const size_t tailBytes = size - fullBlocks * blockBytes;
-        const size_t tailChars = (tailBytes * 8 + BitGroupSize - 1) / BitGroupSize;
-        size_t encodedLength = fullBlocks * blockChars + tailChars;
-        if (PaddingRequired && encodedLength % blockChars) {
-            encodedLength += blockChars - encodedLength % blockChars;
-        }
-
-        std::string output;
-        output.resize(encodedLength);
+        const size_t encodedLength = EncodedLength<BitGroupSize, PaddingRequired>(size);
 
         if (threadCount > 1) {
             std::vector<std::thread> workers;
@@ -298,35 +419,65 @@ namespace snicholls {
                 const size_t blockCount = blocksPerThread + (t < extraBlocks ? 1 : 0);
                 const uint8_t* first = data + blockStart * blockBytes;
                 const uint8_t* last = first + blockCount * blockBytes;
-                char* dest = output.data() + blockStart * blockChars;
+                char* dest = outData + blockStart * blockChars;
                 workers.emplace_back([first, last, dest] {
                     detail::EncodeChunk<BitGroupSize, AlphabetSize, Alphabet>(first, last, dest);
                 });
                 blockStart += blockCount;
             }
             detail::EncodeChunk<BitGroupSize, AlphabetSize, Alphabet>(
-                data, data + (blocksPerThread + (extraBlocks > 0 ? 1 : 0)) * blockBytes, output.data());
+                data, data + (blocksPerThread + (extraBlocks > 0 ? 1 : 0)) * blockBytes, outData);
             for (auto& worker : workers) {
                 worker.join();
             }
             // Tail (partial block) plus any padding
             char* end = detail::EncodeChunk<BitGroupSize, AlphabetSize, Alphabet>(
-                data + fullBlocks * blockBytes, data + size, output.data() + fullBlocks * blockChars);
-            while (end != output.data() + encodedLength) {
+                data + fullBlocks * blockBytes, data + size, outData + fullBlocks * blockChars);
+            while (end != outData + encodedLength) {
                 *end++ = '=';
             }
         } else {
-            char* end = detail::EncodeChunk<BitGroupSize, AlphabetSize, Alphabet>(data, data + size, output.data());
-            while (end != output.data() + encodedLength) {
+            char* end = detail::EncodeChunk<BitGroupSize, AlphabetSize, Alphabet>(data, data + size, outData);
+            while (end != outData + encodedLength) {
                 *end++ = '=';
             }
         }
-
-        return output;
     }
 
-    template<typename Container, size_t BitGroupSize, size_t AlphabetSize, const std::array<char, AlphabetSize>& Alphabet, bool PaddingRequired>
-    Container BaseDecodeParallelImpl(const char* data, size_t size, unsigned threadCount = 0) {
+    template<size_t BitGroupSize, size_t AlphabetSize, const std::array<char, AlphabetSize>& Alphabet, bool PaddingRequired>
+    std::string BaseEncodeParallelBytes(const uint8_t* data, size_t size, unsigned threadCount) {
+        // MakeFilledString avoids zeroing the buffer before it is written, and
+        // worker threads first-touch the pages of their own output slices
+        return detail::MakeFilledString(EncodedLength<BitGroupSize, PaddingRequired>(size), [&](char* outData) {
+            BaseEncodeParallelInto<BitGroupSize, AlphabetSize, Alphabet, PaddingRequired>(data, size, outData, threadCount);
+        });
+    }
+
+    // Number of raw bytes decoding [data, data+size) yields. Strips trailing
+    // padding for padded schemes, so it inspects the buffer tail.
+    template<size_t BitGroupSize, bool PaddingRequired>
+    size_t DecodedLength(const char* data, size_t size) noexcept {
+        constexpr size_t blockBytes = detail::BlockBytes<BitGroupSize>;
+        constexpr size_t blockChars = detail::BlockChars<BitGroupSize>;
+        size_t contentLength = size;
+        if (PaddingRequired) {
+            while (contentLength > 0 && data[contentLength - 1] == '=') {
+                --contentLength;
+            }
+        }
+        const size_t fullBlocks = contentLength / blockChars;
+        const size_t tailChars = contentLength - fullBlocks * blockChars;
+        const size_t tailBytes = tailChars * BitGroupSize / 8;
+        return fullBlocks * blockBytes + tailBytes;
+    }
+
+    // Decode [data, data+size) into the caller-provided buffer dest, which must
+    // hold at least DecodedLength<BitGroupSize, PaddingRequired>(data, size)
+    // bytes. dest may be a freshly mapped output file. Throws
+    // std::invalid_argument on malformed input (including from worker threads).
+    // threadCount 0 = auto.
+    template<size_t BitGroupSize, size_t AlphabetSize, const std::array<char, AlphabetSize>& Alphabet, bool PaddingRequired>
+    void BaseDecodeParallelInto(const char* data, size_t size, uint8_t* dest, unsigned threadCount = 0) {
         constexpr size_t blockBytes = detail::BlockBytes<BitGroupSize>;
         constexpr size_t blockChars = detail::BlockChars<BitGroupSize>;
 
@@ -339,8 +490,7 @@ namespace snicholls {
             }
         }
 
-        const bool autoThreads = (threadCount == 0);
-        if (autoThreads) {
+        if (threadCount == 0) {
             threadCount = std::thread::hardware_concurrency();
             if (contentLength < detail::ParallelMinBytes) {
                 threadCount = 1;
@@ -348,13 +498,6 @@ namespace snicholls {
         }
         const size_t fullBlocks = contentLength / blockChars;
         threadCount = static_cast<unsigned>(std::min<size_t>(std::max(threadCount, 1u), std::max<size_t>(fullBlocks, 1)));
-
-        const size_t tailChars = contentLength - fullBlocks * blockChars;
-        const size_t tailBytes = tailChars * BitGroupSize / 8;
-
-        Container output;
-        output.resize(fullBlocks * blockBytes + tailBytes);
-        uint8_t* dest = reinterpret_cast<uint8_t*>(output.data());
 
         if (threadCount > 1) {
             std::vector<std::thread> workers;
@@ -399,8 +542,24 @@ namespace snicholls {
         } else {
             detail::DecodeChunk<BitGroupSize, AlphabetSize, Alphabet>(data, data + contentLength, dest);
         }
+    }
 
-        return output;
+    template<typename Container, size_t BitGroupSize, size_t AlphabetSize, const std::array<char, AlphabetSize>& Alphabet, bool PaddingRequired>
+    Container BaseDecodeParallelImpl(const char* data, size_t size, unsigned threadCount) {
+        const size_t decodedSize = DecodedLength<BitGroupSize, PaddingRequired>(data, size);
+
+        if constexpr (std::is_same_v<Container, std::string>) {
+            return detail::MakeFilledString(decodedSize, [&](char* outData) {
+                BaseDecodeParallelInto<BitGroupSize, AlphabetSize, Alphabet, PaddingRequired>(
+                    data, size, reinterpret_cast<uint8_t*>(outData), threadCount);
+            });
+        } else {
+            Container output;
+            output.resize(decodedSize); // std::vector has no resize_and_overwrite equivalent
+            BaseDecodeParallelInto<BitGroupSize, AlphabetSize, Alphabet, PaddingRequired>(
+                data, size, reinterpret_cast<uint8_t*>(output.data()), threadCount);
+            return output;
+        }
     }
 
     // Zero-copy adapters: any ByteSource goes straight to the workers
@@ -427,114 +586,6 @@ namespace snicholls {
             reinterpret_cast<const char*>(std::ranges::data(input)), std::ranges::size(input), threadCount);
     }
 
-#ifdef SNICHOLLS_HAS_BITSTRING
-    // ------------------------------------------------------------------
-    // BSD <bitstring.h> interoperability
-    //
-    // Encodes the logical bit sequence bit_test(bits, 0), bit_test(bits, 1),
-    // ..., bit_test(bits, nbits - 1). Note this is bitstring.h's logical
-    // order (bit 0 is the LSB of byte 0), which differs from the byte-stream
-    // order used by the string/Binary functions above. Any bit count is
-    // supported, not just multiples of 8; unused trailing bits of the final
-    // character are zero, per RFC 4648.
-    //
-    // Decoding returns a BitString whose storage works directly with the
-    // bit_test/bit_set/bit_clear macros. Because an encoded character always
-    // carries BitGroupSize bits, the decoder cannot know the original bit
-    // count on its own; pass expectedBits to trim the result (the round trip
-    // otherwise returns nbits rounded up to a whole number of characters).
-    // ------------------------------------------------------------------
-
-    struct BitString {
-        std::vector<bitstr_t> storage; // use with bit_test/bit_set/bit_clear
-        size_t nbits = 0;
-
-        bitstr_t* data() { return storage.data(); }
-        const bitstr_t* data() const { return storage.data(); }
-    };
-
-    template<size_t BitGroupSize, size_t AlphabetSize, const std::array<char, AlphabetSize>& Alphabet, bool PaddingRequired>
-    constexpr std::string BaseEncodeBitstring(const bitstr_t* bits, size_t nbits) {
-        constexpr size_t mask = (size_t{1} << BitGroupSize) - 1;
-        std::string output;
-        output.reserve((nbits + BitGroupSize - 1) / BitGroupSize);
-
-        size_t bitBuffer = 0;
-        int bitBufferLength = 0;
-
-        for (size_t i = 0; i < nbits; ++i) {
-            bitBuffer = (bitBuffer << 1) | (bit_test(bits, i) ? size_t{1} : size_t{0});
-            if (++bitBufferLength == static_cast<int>(BitGroupSize)) {
-                output += Alphabet[bitBuffer & mask];
-                bitBufferLength = 0;
-            }
-        }
-
-        if (bitBufferLength > 0) {
-            output += Alphabet[(bitBuffer << (BitGroupSize - bitBufferLength)) & mask];
-        }
-
-        if (PaddingRequired) {
-            while (output.length() % detail::BlockChars<BitGroupSize>) {
-                output += '=';
-            }
-        }
-
-        return output;
-    }
-
-    template<size_t BitGroupSize, size_t AlphabetSize, const std::array<char, AlphabetSize>& Alphabet, bool PaddingRequired>
-    constexpr BitString BaseDecodeBitstring(std::string_view input, size_t expectedBits = SIZE_MAX) {
-        BitString output;
-        output.storage.assign(bitstr_size(input.size() * BitGroupSize), 0);
-
-        size_t position = 0;
-        bool paddingSeen = false;
-
-        for (char c : input) {
-            if (PaddingRequired && c == '=') {
-                paddingSeen = true;
-                continue;
-            }
-
-            // RFC 4648: '=' is only valid as trailing padding
-            if (paddingSeen) {
-                throw std::invalid_argument("Invalid character after padding");
-            }
-
-            int index = detail::ReverseTable<AlphabetSize, Alphabet>[static_cast<unsigned char>(c)];
-            if (index < 0) {
-                throw std::invalid_argument("Invalid character in encoded string");
-            }
-
-            for (int k = static_cast<int>(BitGroupSize) - 1; k >= 0; --k) {
-                if ((index >> k) & 1) {
-                    bit_set(output.storage.data(), position);
-                }
-                ++position;
-            }
-        }
-
-        output.nbits = std::min(position, expectedBits);
-        output.storage.resize(bitstr_size(output.nbits));
-        // Zero the unused bits of the final byte so equal bitstrings compare equal
-        for (size_t i = output.nbits; i < output.storage.size() * 8; ++i) {
-            bit_clear(output.storage.data(), i);
-        }
-
-        return output;
-    }
-
-#define SNICHOLLS_BITSTRING_FUNCTIONS(Name, BitGroupSize, AlphabetSize, Alphabet, Padded) \
-    constexpr std::string Encode##Name##Bitstring(const bitstr_t* bits, size_t nbits) { \
-        return BaseEncodeBitstring<BitGroupSize, AlphabetSize, Alphabet, Padded>(bits, nbits); \
-    } \
-    constexpr BitString Decode##Name##Bitstring(std::string_view input, size_t expectedBits = SIZE_MAX) { \
-        return BaseDecodeBitstring<BitGroupSize, AlphabetSize, Alphabet, Padded>(input, expectedBits); \
-    }
-#else
-#define SNICHOLLS_BITSTRING_FUNCTIONS(Name, BitGroupSize, AlphabetSize, Alphabet, Padded)
-#endif /* SNICHOLLS_HAS_BITSTRING */
 
     // ------------------------------------------------------------------
     // Named entry points, one family per scheme, generated from one table.
@@ -597,21 +648,29 @@ namespace snicholls {
     } \
     inline Binary Decode##Name##BinaryParallel(const char* input, unsigned threadCount = 0) { \
         return Decode##Name##BinaryParallel(std::string_view{input}, threadCount); \
-    } \
-    SNICHOLLS_BITSTRING_FUNCTIONS(Name, BitGroupSize, AlphabetSize, Alphabet, Padded)
+    }
 
-    SNICHOLLS_DEFINE_SCHEME(Base64,          6, 64, Base64Alphabet,          true)
-    SNICHOLLS_DEFINE_SCHEME(Base32,          5, 32, Base32Alphabet,          true)
-    SNICHOLLS_DEFINE_SCHEME(Base32Hex,       5, 32, Base32HexAlphabet,       true)
-    SNICHOLLS_DEFINE_SCHEME(Base36,          5, 36, Base36Alphabet,          false)
-    SNICHOLLS_DEFINE_SCHEME(Base32Crockford, 5, 32, Base32CrockfordAlphabet, false)
-    SNICHOLLS_DEFINE_SCHEME(Base16,          4, 16, Base16Alphabet,          false)
-    SNICHOLLS_DEFINE_SCHEME(Base8,           3, 8,  Base8Alphabet,           false)
-    SNICHOLLS_DEFINE_SCHEME(Base4,           2, 4,  Base4Alphabet,           false)
-    SNICHOLLS_DEFINE_SCHEME(Base2,           1, 2,  Base2Alphabet,           false)
+// The scheme table: X(Name, BitGroupSize, AlphabetSize, Alphabet, PaddingRequired),
+// one row per scheme. Base64Url is RFC 4648 section 5; Base64UrlNoPad is the
+// unpadded JWT-style variant. The adapter headers (bitstring, bitset, stream,
+// ...) apply their own X to this same table, so the scheme list lives in
+// exactly one place. It intentionally stays defined after this header.
+#define SNICHOLLS_FOR_EACH_SCHEME(X) \
+    X(Base64,          6, 64, snicholls::Base64Alphabet,          true)  \
+    X(Base64Url,       6, 64, snicholls::Base64UrlAlphabet,       true)  \
+    X(Base64UrlNoPad,  6, 64, snicholls::Base64UrlAlphabet,       false) \
+    X(Base32,          5, 32, snicholls::Base32Alphabet,          true)  \
+    X(Base32Hex,       5, 32, snicholls::Base32HexAlphabet,       true)  \
+    X(Base36,          5, 36, snicholls::Base36Alphabet,          false) \
+    X(Base32Crockford, 5, 32, snicholls::Base32CrockfordAlphabet, false) \
+    X(Base16,          4, 16, snicholls::Base16Alphabet,          false) \
+    X(Base8,           3, 8,  snicholls::Base8Alphabet,           false) \
+    X(Base4,           2, 4,  snicholls::Base4Alphabet,           false) \
+    X(Base2,           1, 2,  snicholls::Base2Alphabet,           false)
+
+    SNICHOLLS_FOR_EACH_SCHEME(SNICHOLLS_DEFINE_SCHEME)
 
 #undef SNICHOLLS_DEFINE_SCHEME
-#undef SNICHOLLS_BITSTRING_FUNCTIONS
 }
 
 #endif /* encode_decode_base_whatever_hpp */

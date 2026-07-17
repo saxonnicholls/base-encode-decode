@@ -9,6 +9,10 @@
 #include <iostream>
 
 #include "encode_decode_base_whatever.hpp"
+#include "encode_decode_bitstring.hpp"
+#include "encode_decode_dna.hpp"
+#include "encode_decode_object.hpp"
+#include "utils/stl_support.hpp"
 
 // The serial path is constexpr: the compiler verifies these while building
 static_assert(snicholls::EncodeBase64("Hello, World!") == "SGVsbG8sIFdvcmxkIQ==");
@@ -228,6 +232,63 @@ void BitstringDemo() {
 }
 #endif
 
+// Function to demonstrate DNA/RNA packing
+void DnaDemo() {
+    using namespace snicholls;
+
+    const std::string sequence = "ACGTACGTTTAGGCCANNNNRYSWKM"; // canonical + N + ambiguity
+    std::cout << "Sequence (" << sequence.size() << " bases): " << sequence << std::endl;
+
+    // 4-bit IUPAC handles N and ambiguity codes (2x smaller than ASCII)
+    const Binary iupac = PackDnaIupac(sequence);
+    std::cout << "  4-bit IUPAC packed: " << iupac.size() << " bytes ("
+              << sequence.size() << " -> " << iupac.size() << ", "
+              << static_cast<double>(sequence.size()) / iupac.size() << "x)" << std::endl;
+    std::cout << "  unpacked: " << UnpackDnaIupac(iupac, sequence.size()) << std::endl;
+
+    // 2-bit is 4x smaller but only for canonical A/C/G/T
+    const std::string canonical = "ACGTACGTTTAGGCCA";
+    const Binary twoBit = PackDna(canonical);
+    std::cout << "Canonical (" << canonical.size() << " bases): " << canonical << std::endl;
+    std::cout << "  2-bit packed: " << twoBit.size() << " bytes ("
+              << static_cast<double>(canonical.size()) / twoBit.size() << "x)" << std::endl;
+    std::cout << "  as Base64 for transport: " << EncodeBase64Binary(twoBit) << std::endl;
+    std::cout << "  round trip: " << UnpackDna(twoBit, canonical.size()) << std::endl;
+}
+
+// Function to demonstrate whole-object and STL-container serialization
+void ObjectDemo() {
+    using namespace snicholls;
+
+    struct SensorReading {
+        uint32_t id;
+        double celsius;
+        char status;
+    };
+
+    const SensorReading reading{7, 21.5, 'K'};
+    const std::string token = EncodeBase64UrlObject(reading); // URL-safe, could go in a link
+    std::cout << "SensorReading{7, 21.5, 'K'} as Base64Url: " << token << std::endl;
+
+    const SensorReading back = DecodeBase64UrlObject<SensorReading>(token);
+    std::cout << "  decoded: id=" << back.id << " celsius=" << back.celsius
+              << " status=" << back.status << std::endl;
+    std::cout << "  " << sizeof(SensorReading) << " bytes -> " << token.size()
+              << " chars (same-ABI snapshot)" << std::endl;
+
+    // With utils/stl_support.hpp, whole STL containers serialise recursively -
+    // here a nested map<string, vector<int>>.
+    std::map<std::string, std::vector<int>> scores{
+        {"alice", {90, 85, 92}},
+        {"bob", {70, 88}},
+    };
+    const std::string encoded = EncodeBase64Object(scores);
+    std::cout << "map<string,vector<int>> as Base64: " << encoded << std::endl;
+    const auto restored = DecodeBase64Object<std::map<std::string, std::vector<int>>>(encoded);
+    std::cout << "  round trip ok: " << (restored == scores ? "yes" : "NO - BUG")
+              << " (" << restored.size() << " entries)" << std::endl;
+}
+
 // Main function
 int main() {
     std::cout << "String Encoding/Decoding Demo:" << std::endl;
@@ -238,6 +299,12 @@ int main() {
 
     std::cout << "\nParallel Encoding/Decoding Demo (large input):" << std::endl;
     ParallelDemo();
+
+    std::cout << "\nDNA/RNA Packing Demo:" << std::endl;
+    DnaDemo();
+
+    std::cout << "\nObject Serialization Demo:" << std::endl;
+    ObjectDemo();
 
 #ifdef SNICHOLLS_HAS_BITSTRING
     std::cout << "\nBSD <bitstring.h> Interop Demo:" << std::endl;

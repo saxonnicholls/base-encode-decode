@@ -1,0 +1,90 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # x86-64: exercise the Intel SSSE3 kernels (-mssse3, since the plain
+          # x86-64 baseline does not enable SSSE3) under both GCC and Clang.
+          - name: linux-x86-gcc
+            os: ubuntu-latest
+            cxx: g++
+            simd: Intel SSSE3
+            extra: -mssse3
+          - name: linux-x86-clang
+            os: ubuntu-latest
+            cxx: clang++
+            simd: Intel SSSE3
+            extra: -mssse3
+          # aarch64: NEON is baseline, no extra flags needed.
+          - name: linux-arm-gcc
+            os: ubuntu-24.04-arm
+            cxx: g++
+            simd: ARM NEON
+            extra: ""
+          - name: linux-arm-clang
+            os: ubuntu-24.04-arm
+            cxx: clang++
+            simd: ARM NEON
+            extra: ""
+          # Apple clang on both architectures (macos-latest is arm64, macos-13 is x86).
+          - name: macos-arm-clang
+            os: macos-latest
+            cxx: clang++
+            simd: ARM NEON
+            extra: ""
+          - name: macos-x86-clang
+            os: macos-13
+            cxx: clang++
+            simd: Intel SSSE3
+            extra: -mssse3
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compiler version
+        run: ${{ matrix.cxx }} --version
+
+      # Runs the suite twice: SIMD build and forced-scalar (-DSNICHOLLS_NO_SIMD) build.
+      - name: Build and test
+        run: make test CXX='${{ matrix.cxx }}' CXXFLAGS='-std=gnu++23 -O3 -Wall -Wextra ${{ matrix.extra }}'
+
+      # Guard against silently testing scalar where SIMD was expected.
+      - name: Confirm SIMD kernels are active
+        run: |
+          ./build/tests | grep -q "SIMD: ${{ matrix.simd }} kernels active"
+
+      - name: Benchmark smoke test
+        run: make bench CXX='${{ matrix.cxx }}' CXXFLAGS='-std=gnu++23 -O3 -Wall -Wextra ${{ matrix.extra }}' BENCH_MB=8
+
+  cmake:
+    name: cmake-ctest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build build -j
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+  xcode:
+    name: xcode-build
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and run the Xcode project
+        run: |
+          xcodebuild -project BaseEncodeDecode.xcodeproj -scheme BaseEncodeDecode \
+            -configuration Debug -derivedDataPath build/xcode CODE_SIGNING_ALLOWED=NO build
+          build/xcode/Build/Products/Debug/BaseEncodeDecode | tail -n 3

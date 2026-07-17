@@ -2,3 +2,8 @@ build/
 cmake-build*/
 .DS_Store
 xcuserdata/
+
+# Local deployment scripts (may contain host/credential details) - never commit
+deploy_pi.sh
+pi_config.sh
+attestations.jsonl
