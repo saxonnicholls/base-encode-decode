@@ -1,0 +1,5 @@
+CompileFlags:
+  Add:
+    - -std=gnu++20
+    - -I/Users/Shared/Git/base-encode-decode/BaseEncodeDecode
+    - -I/Users/Shared/Git/base-encode-decode/tests/third_party/cpp-base64

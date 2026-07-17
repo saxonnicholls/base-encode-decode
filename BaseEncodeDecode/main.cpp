@@ -5,9 +5,14 @@
 //  Created by Saxon Nicholls on 1/8/2024.
 //
 
+#include <chrono>
 #include <iostream>
 
 #include "encode_decode_base_whatever.hpp"
+
+// The serial path is constexpr: the compiler verifies these while building
+static_assert(snicholls::EncodeBase64("Hello, World!") == "SGVsbG8sIFdvcmxkIQ==");
+static_assert(snicholls::DecodeBase64("SGVsbG8sIFdvcmxkIQ==") == "Hello, World!");
 
 // Function to demonstrate encoding/decoding with strings
 void StringDemo() {
@@ -88,7 +93,7 @@ void BinaryDemo() {
                 std::cout << '.';
             }
         }
-        std::cout << std::endl;
+        std::cout << std::dec << std::endl; // restore stream state after std::hex
     };
 
     // Base2 Encoding/Decoding
@@ -155,13 +160,89 @@ void BinaryDemo() {
     printBinaryData(decodedBase64);
 }
 
+// Function to demonstrate the parallel API on a large input, with timings
+void ParallelDemo() {
+    using namespace snicholls;
+    using Clock = std::chrono::steady_clock;
+
+    // 64 MiB of deterministic pseudo-random data
+    Binary data(size_t{64} << 20);
+    uint64_t state = 0x9E3779B97F4A7C15ull;
+    for (auto& byte : data) {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        byte = static_cast<uint8_t>(state);
+    }
+
+    const auto gbPerSecond = [](size_t bytes, double seconds) {
+        return static_cast<double>(bytes) / seconds / 1e9;
+    };
+    const auto seconds = [](Clock::time_point start, Clock::time_point stop) {
+        return std::chrono::duration<double>(stop - start).count();
+    };
+
+    auto t0 = Clock::now();
+    const std::string serial = EncodeBase64Binary(data);
+    auto t1 = Clock::now();
+    const std::string parallel = EncodeBase64BinaryParallel(data);
+    auto t2 = Clock::now();
+
+    std::cout << "Base64, " << (data.size() >> 20) << " MiB input:" << std::endl;
+    std::cout << "  serial encode:   " << gbPerSecond(data.size(), seconds(t0, t1)) << " GB/s" << std::endl;
+    std::cout << "  parallel encode: " << gbPerSecond(data.size(), seconds(t1, t2)) << " GB/s" << std::endl;
+    std::cout << "  outputs identical: " << (serial == parallel ? "yes" : "NO - BUG") << std::endl;
+
+    t0 = Clock::now();
+    const Binary decoded = DecodeBase64BinaryParallel(parallel);
+    t1 = Clock::now();
+    std::cout << "  parallel decode: " << gbPerSecond(decoded.size(), seconds(t0, t1)) << " GB/s" << std::endl;
+    std::cout << "  round trip ok:   " << (decoded == data ? "yes" : "NO - BUG") << std::endl;
+}
+
+#ifdef SNICHOLLS_HAS_BITSTRING
+// Function to demonstrate BSD <bitstring.h> interop
+void BitstringDemo() {
+    using namespace snicholls;
+
+    // A 12-bit bitstring: set bits 0, 3, 4, 11
+    std::vector<bitstr_t> bits(bitstr_size(12), 0);
+    bit_set(bits.data(), 0);
+    bit_set(bits.data(), 3);
+    bit_set(bits.data(), 4);
+    bit_set(bits.data(), 11);
+
+    const std::string base2 = EncodeBase2Bitstring(bits.data(), 12);
+    const std::string base64 = EncodeBase64Bitstring(bits.data(), 12);
+    std::cout << "12-bit bitstring as Base2:  " << base2 << std::endl;
+    std::cout << "12-bit bitstring as Base64: " << base64 << std::endl;
+
+    const BitString decoded = DecodeBase64Bitstring(base64, 12);
+    std::cout << "decoded bits set: ";
+    for (size_t i = 0; i < decoded.nbits; ++i) {
+        if (bit_test(decoded.data(), i)) {
+            std::cout << i << " ";
+        }
+    }
+    std::cout << std::endl;
+}
+#endif
+
 // Main function
 int main() {
     std::cout << "String Encoding/Decoding Demo:" << std::endl;
     StringDemo();
-    
+
     std::cout << "\nBinary Encoding/Decoding Demo:" << std::endl;
     BinaryDemo();
+
+    std::cout << "\nParallel Encoding/Decoding Demo (large input):" << std::endl;
+    ParallelDemo();
+
+#ifdef SNICHOLLS_HAS_BITSTRING
+    std::cout << "\nBSD <bitstring.h> Interop Demo:" << std::endl;
+    BitstringDemo();
+#endif
 
     return 0;
 }
