@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2024 Saxon Nicholls
+
 //
 //  benchmark_main.cpp
 //  BaseEncodeDecode throughput benchmark

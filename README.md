@@ -10,7 +10,7 @@ At a glance:
 - **Correct** — RFC 4648 padding and validation, verified against the RFC vectors (at compile time) and against [cpp-base64](https://github.com/ReneNyffenegger/cpp-base64).
 - **Fast** — `constexpr` scalar core, auto-detected SSE/NEON SIMD, and a multithreaded path for multi-GB inputs; several GB/s on a desktop.
 - **Flexible input** — any contiguous byte range (`string`, `string_view`, `span`, `vector`, `array`, C arrays, `std::byte`), read zero-copy.
-- **Opt-in adapters** — streaming, memory-mapped files, `std::format`, data URIs / HTTP Basic auth, `std::bitset`, BSD `<bitstring.h>`, DNA/RNA packing, extensible object/STL serialization, nlohmann::json.
+- **Opt-in adapters** — streaming, memory-mapped files, `std::format`, data URIs / HTTP Basic auth, `std::bitset`, BSD `<bitstring.h>`, DNA/RNA packing, extensible object/STL serialization, name→type construct-and-dispatch (no variant/switch), wiped-memory secure types, authenticated encryption (OpenSSL / libsodium behind one interface), key-value storage (in-memory / RocksDB), nlohmann::json.
 - **No dependencies** — copy the headers in; C++20, works with Clang, GCC, and MSVC.
 
 ## Design philosophy: simplicity first
@@ -38,6 +38,15 @@ To drop the library into a project, copy the `BaseEncodeDecode` headers you need
 | `encode_decode_dna.hpp`           | adapter: DNA/RNA 2-bit and 4-bit (IUPAC) packing            |
 | `encode_decode_object.hpp`        | adapter: serialise an object (trait-based, extensible)      |
 | `utils/stl_support.hpp`           | adapter add-on: ObjectSerializer for the STL container zoo  |
+| `utils/fixed_string.hpp`          | util: compile-time `fixed_string` (NTTP-usable) |
+| `utils/overloaded.hpp`            | util: lambda-overload-set helper (per-type handlers) |
+| `utils/type_registry.hpp`         | util: name → type construct-and-dispatch (no variant/base/switch) |
+| `utils/secure.hpp`                | util: wiped-memory `SecureBytes`/`SecureString`, `IsSecure<T>`, constant-time compare |
+| `utils/encryption.hpp`            | util: general pure-virtual `Encryptor` interface (authenticated) |
+| `utils/encryption_openssl.hpp`    | drop-in: AES-256-GCM (auto-enabled with OpenSSL) |
+| `utils/encryption_sodium.hpp`     | drop-in: XChaCha20-Poly1305 + Argon2id (auto-enabled with libsodium) |
+| `utils/key_value_store.hpp`       | util: `KeyValueStoreInterface` + in-memory + object save/load (plain or encrypted) |
+| `utils/kv_rocksdb.hpp`            | drop-in: RocksDB `KeyValueStoreInterface` (auto-enabled with RocksDB) |
 | `encode_decode_json.hpp`          | adapter: nlohmann::json (`Binary` as Base64 strings)      |
 
 Adapters are included explicitly and only when you want them; the SIMD headers may simply be omitted (the library falls back to scalar). Requires C++20 (C++23 unlocks a faster output-allocation path automatically). All schemes are defined in a single table (`SNICHOLLS_FOR_EACH_SCHEME`), which every adapter reuses — adding a scheme there adds it everywhere.
@@ -296,6 +305,106 @@ auto back = DecodeBase64Object<std::map<std::string, std::vector<int>>>(s);   //
 
 Covered: **utility** (`pair`, `tuple`, `optional`, `variant`), **sequence** (`array`, `deque`, `list`, `forward_list`), **associative** (`set`, `multiset`, `map`, `multimap`), **unordered** (`unordered_{set,multiset,map,multimap}`), and **adaptors** (`stack`, `queue`, `priority_queue`). Arbitrary nesting works — `std::map<std::string, std::vector<std::pair<int, std::string>>>` round-trips — and your own types (once they have an `ObjectSerializer`) compose into every container automatically, e.g. `std::vector<Person>` or `std::map<std::string, Person>`. A container of a non-serialisable type is itself not serialisable — a clean compile error, never a silent byte-copy. The container framing (counts, variant tags) is portable; only the trivially-copyable *leaves* carry native byte order.
 
+### Construct-and-dispatch by name (`utils/type_registry.hpp`)
+
+A common serialisation need: you read `{ "object1", "…serialised…" }` off the wire and want to reconstruct the right type and dispatch it — **without a `std::variant`, a common base class, or a `switch`**. A compile-time registry binds each type to a name; dispatch is a short-circuiting fold that compares the runtime string to each compile-time name and, on the first match, deserialises that type and hands it to a callable. The fold *is* the dispatch — there is no switch.
+
+```cpp
+#include "encode_decode_object.hpp"   // to (de)serialise your types
+#include "utils/type_registry.hpp"
+#include "utils/overloaded.hpp"
+
+using Registry = TypeRegistry<
+    Named<"object1", Object1>,        // compile-time name  ↔  type
+    Named<"object2", Object2>,
+    Named<"object3", Object3>>;
+
+bool handled = Registry::dispatch(name, serialised, overloaded{
+    [](Object1&& o) { handleOne(o); },     // one lambda per type, resolved at
+    [](Object2&& o) { handleTwo(o); },      // compile time - no if/switch
+    [](Object3&& o) { handleThree(o); },
+});                                          // returns false if `name` isn't registered
+```
+
+The reverse direction is `Registry::serialize(obj)`, which returns `{ registered name, Base64 }` using a compile-time reverse lookup (`nameOf<T>()` — naming an unregistered type is a compile error). Deserialisation defaults to this library's Base64 object codec, but `dispatch` takes a custom deserialiser `(std::type_identity<T>, string) -> T`, so JSON or any other format drops in — again, with no base class.
+
+Two small building blocks back it, both usable on their own:
+
+- **`utils/fixed_string.hpp`** — a clean, dependency-free compile-time `basic_fixed_string<CharT, N>` (with `fixed_string`/`wfixed_string`/`u8/16/32` aliases) usable as a non-type template parameter, so a type can be *bound to a literal name*. Std-style API: iterators, `string_view` conversion, comparison, concatenation, `substr`, `std::hash`. Same idiom as [unterumarmung/fixed_string](https://github.com/unterumarmung/fixed_string), kept minimal to avoid a dependency.
+- **`utils/overloaded.hpp`** — the lambda-overload-set helper, so a per-type handler is one lambda per type (and the compiler enforces that every registered type is handled, unless you add a generic `[](auto&&){}` catch-all).
+
+### Secure memory for secrets (`utils/secure.hpp`)
+
+For keys, seeds, and passphrases: `SecureBytes` is a drop-in for `Binary` (and `SecureString` for `std::string`) whose storage is scrubbed on every free — reallocation *and* destruction — via a wiping allocator. `SecureBytes` is a `ByteSource`, so it feeds the encoders directly, and `Decode*Secure` decodes into it without an unwiped intermediate:
+
+```cpp
+#include "utils/secure.hpp"
+
+SecureBytes key = DecodeBase64Secure(b64_secret);       // decoded straight into wiped storage
+SecureString b64 = EncodeBase64<SecureString>(key);     // encoded secret in wiped storage too
+
+if (ConstantTimeEqual(mac_a, mac_b)) { /* ... */ }      // no data-dependent branch
+SecureWipe(buffer.data(), buffer.size());               // best-effort explicit zeroing
+```
+
+**Output-type templating.** Every `Encode*` function templates on its output string type (defaulting to `std::string`), so `EncodeBase64<SecureString>(secret)` writes the encoded secret straight into wiped storage — no plaintext `std::string` intermediate. Combined with `Decode*Secure`, a full round trip can avoid ever materialising a secret in ordinary memory.
+
+**SecureSTL.** The standard containers are also available on the wiping allocator with identical APIs — `SecureVector<T>`, `SecureDeque<T>`, `SecureList<T>`, `SecureSet<K>`, `SecureMap<K,V>`, `SecureUnorderedSet<K>`, `SecureUnorderedMap<K,V>` (with `SecureBytes = SecureVector<uint8_t>`). They compose with the object serializer too. Note the allocator scrubs the *container's own* storage, not heap owned by non-trivial element types — use a Secure element type (e.g. `SecureVector<SecureString>`) for fully-wiped nesting.
+
+**`IsSecure<T>`.** A composable trait (and `SecureStorage` concept) that answers "does this type keep all of its transitive heap storage in wiped memory?" — trivially-copyable types have none to leak, Secure containers are secure iff their elements are, and pairs/tuples/optionals/variants iff their members are:
+
+```cpp
+static_assert(IsSecureV<SecureVector<SecureString>>);       // fully wiped
+static_assert(!IsSecureV<SecureVector<std::string>>);      // buffer wiped, strings not
+static_assert(!IsSecureV<SecureMap<std::string, int>>);    // key type not secure
+
+template<SecureStorage T> void store_secret(const T&);      // constrain APIs to secure types
+```
+
+**Read the scope honestly.** This is best-effort defense-in-depth, *not* a hard guarantee: it doesn't stop copies the compiler makes before the wipe (register spills), secrets paged to swap (no `mlock`), or use of freed pages (no guard pages); `SecureString`'s small-string optimisation keeps short values inline and unwiped (use `SecureBytes` for short secrets); and base-encoding a secret still yields an ordinary `std::string` you must handle. For hard requirements (mlock, guard pages, audited wiping) use a dedicated library such as libsodium's secure-memory API — this header is the lightweight, dependency-free option.
+
+### Encryption and key-value storage (optional drop-ins)
+
+The library never implements a cipher itself. Instead it defines one general, pure-virtual `Encryptor` interface (`utils/encryption.hpp`) and provides drop-in implementations that delegate entirely to vetted libraries, auto-enabled only when their headers are present:
+
+- `utils/encryption_openssl.hpp` — **AES-256-GCM** (OpenSSL; link `-lcrypto`)
+- `utils/encryption_sodium.hpp` — **XChaCha20-Poly1305** + Argon2id key derivation (libsodium; link `-lsodium`)
+
+Every `Encryptor` returns a self-contained `SecureBytes` blob (random nonce + ciphertext + auth tag); `decrypt` verifies the tag and throws `EncryptionError` on tampering or a wrong key — it never returns unauthenticated data.
+
+```cpp
+#include "utils/encryption_sodium.hpp"
+
+SecureBytes key = SodiumEncryptor::generateKey();   // or keyFromPassphrase(pw, salt) via Argon2id
+SodiumEncryptor cipher(key);
+SecureBytes blob = cipher.encrypt(secret);          // any byte range in
+SecureBytes back = cipher.decrypt(blob);            // throws on tamper / wrong key
+```
+
+`utils/key_value_store.hpp` adds a small `KeyValueStoreInterface` (`put`/`get`/`contains`/`remove`/`getByPrefix`), an in-memory implementation, and helpers to save/load **any serialisable object** under a key — plaintext or encrypted-at-rest. `utils/kv_rocksdb.hpp` is a RocksDB implementation of the same interface (auto-enabled with RocksDB), so the helpers work unchanged against persistent storage:
+
+```cpp
+#include "encode_decode_object.hpp"
+#include "utils/key_value_store.hpp"
+#include "utils/kv_rocksdb.hpp"
+
+RocksDbKeyValueStore kv("/var/data/vault");
+PutObjectEncrypted(kv, "seed", wallet, cipher);            // object -> encrypt -> Base64 -> RocksDB
+auto w = GetObjectEncrypted<Wallet>(kv, "seed", cipher);   // and back
+```
+
+Because every layer speaks only in bytes, they compose freely. For example, a secret object encrypted and then represented as **DNA** (the ciphertext is safe, so any encoding is fine), round-tripped back:
+
+```cpp
+SecureBytes cipher_bytes = cipher.encrypt(ToBytes(secretObject));
+std::string dna = UnpackDna(cipher_bytes);                 // ciphertext as ACGT
+// ... store / transmit dna ...
+SecureBytes plain = cipher.decrypt(PackDna(dna));
+auto obj = FromBytes<SecretObject>(plain);
+```
+
+Run the crypto/storage tests with `make test-crypto` (adds RocksDB with `make test-crypto ROCKSDB=1`). They cover authenticated round trips, tamper/wrong-key rejection, Argon2id keys, encrypted object storage, and the encrypt→DNA→decrypt composition, verified against real OpenSSL, libsodium, and RocksDB. For a narrated end-to-end walkthrough — a 5-level-nested object serialised → encrypted → Base64 → decoded → decrypted → deserialised → compared — run `make demo-crypto`.
+
 ### nlohmann::json (`encode_decode_json.hpp`)
 
 ```cpp
@@ -357,9 +466,41 @@ The test suite is deliberately lightweight — plain `assert()`, no framework. I
 
 Third-party code (`cpp-base64`, `nlohmann/json`) is vendored under `tests/third_party/` and used **only** by the tests; the library itself depends on nothing.
 
+### Single-file amalgamation (Compiler Explorer)
+
+`tools/amalgamate.py` inlines a C++ entry file and every local `#include "..."` (each exactly once) into one self-contained translation unit — so you can paste it straight into [Compiler Explorer](https://godbolt.org) and inspect how tight the generated code is. System `<...>` includes are left *exactly where they are* (never hoisted or de-duplicated), so headers that pull in `<immintrin.h>`/`<arm_neon.h>` only inside an `#if` SIMD guard stay correct on every target. The result compiles with **no** include flags.
+
+The easy path is the Make target:
+
+```sh
+make amalgamate                          # -> build/single.cpp (library + the demo main)
+make amalgamate ENTRY=path/to/thing.cpp  # amalgamate your own entry instead
+```
+
+Or call the script directly (it needs an entry file and the include root):
+
+```sh
+tools/amalgamate.py BaseEncodeDecode/main.cpp -I BaseEncodeDecode -o single.cpp
+# -I DIR       add an include search directory (repeatable)
+# -o FILE      write here instead of stdout
+# --no-markers omit the "begin/end <file>" comment banners
+```
+
+For focused codegen, point `ENTRY`/the script at a tiny file that calls just the function you care about (e.g. one `EncodeBase64` call), so the assembly isn't buried under the whole demo.
+
+### Clean containerised builds (`.devcontainer/`)
+
+For reproducible builds — especially of the optional crypto/KV drop-ins, which need OpenSSL, libsodium and RocksDB — there's a lean Ubuntu devcontainer. Open it in VS Code (it builds and tests on create), or run the full matrix from the command line:
+
+```sh
+.devcontainer/ci-local.sh    # builds the image and runs GCC+Clang base suites + the crypto suite
+```
+
+The image is **not** pinned to a platform, so it builds your host's architecture natively — amd64 on an Intel machine, arm64 on a Raspberry Pi — which sidesteps slow/buggy QEMU cross-emulation: run the same script on the Intel box and on the Pi to cover both. (The Pi needs Docker installed: `curl -fsSL https://get.docker.com | sh`.)
+
 ## Benchmarks
 
-`bench` reports GB/s of raw binary bytes (best of 3 runs, timings include output allocation). What the SIMD drop-ins add on top of the block-unrolled scalar core, Intel Xeon W-3245, 512 MiB input:
+`bench` reports GB/s of raw binary bytes (best of 3 runs, timings include output allocation), built `-O3 -march=native`. What the SIMD drop-ins add on top of the block-unrolled scalar core, Intel Xeon W-3245, 512 MiB input:
 
 ```text
 Base64                        encode        decode
@@ -393,6 +534,8 @@ Base16
 ```
 
 At these sizes parallel throughput is bounded by memory bandwidth and page faults on the freshly allocated output, not by the codec. Numbers vary with hardware.
+
+**On compiler flags.** `-Ofast` gives no meaningful improvement over `-O3` here, and it's worth understanding why: `-Ofast` is `-O3 -ffast-math`, and this codec is pure *integer* arithmetic, so `-ffast-math` is a no-op; the SIMD kernels are hand-written intrinsics the optimizer can't improve (and on an x86-64 macOS baseline SSSE3 is already on); and the parallel path is memory-bandwidth-bound — an encode moves ~1.2 GB (512 MiB in + ~683 MiB out) per pass, so ~5 GB/s is a DRAM ceiling no flag beats, which is also why 32 threads gives ~4× over one core rather than 32×. Build with `-O3 -march=native` and you have what the machine allows. The two real levers, both in [FUTURE_DIRECTIONS.md](FUTURE_DIRECTIONS.md): an AVX2/AVX-512 Base64 kernel would raise the *single-core* rate ~2–3×, while the *parallel* rate is already at the memory ceiling.
 
 ## What you should expect
 
@@ -475,7 +618,7 @@ decoded bits set: 0 3 4 11
 - **Bitstring functions moved**: `Encode*Bitstring`/`Decode*Bitstring` now live in the `encode_decode_bitstring.hpp` adapter — add that include if you used them from the main header.
 - **Endianness**: base encodings operate on byte streams, so output is identical on all platforms. If you encode multi-byte types, convert them to a defined byte order first — that is a serialization concern, not a codec one.
 - **SIMD verification**: both kernel sets are runtime-verified by this repository's test suite — SSSE3 on an Intel Xeon (Apple clang and Homebrew clang) and NEON on a Raspberry Pi running 64-bit Raspberry Pi OS (GCC 14). Run `make test` on your own target to re-verify; the suite always runs both the SIMD and forced-scalar builds.
-- **Secrets**: the decoders use data-dependent table lookups and are not constant-time. For encoding cryptographic key material where side channels matter, use a hardened implementation (e.g. libsodium's `sodium_bin2base64`).
+- **Secrets**: the decoders use data-dependent table lookups and are not constant-time. `utils/secure.hpp` provides `SecureBytes`/`SecureString` (wiped-on-free) and `ConstantTimeEqual` as best-effort, dependency-free helpers — but for cryptographic key material where side channels matter, use a hardened implementation (e.g. libsodium's `sodium_bin2base64` and secure-memory API).
 - **Base36 / Base32Crockford**: bit-group encodings (5 bits per character) sharing the machinery of the RFC schemes — not arithmetic base-N conversions. (Crockford Base32 is also the ULID alphabet, if you are implementing ULIDs.)
 - **Thread safety**: all functions are stateless and safe to call concurrently; each stream encoder/decoder instance is single-threaded.
 
@@ -488,7 +631,7 @@ Improvements and pull requests are very welcome — new adapters, more `ObjectSe
 - **Keep every scheme uniform.** Schemes live in the single `SNICHOLLS_FOR_EACH_SCHEME` table; adding one there propagates it across every API and adapter.
 - **Verify where it matters.** SIMD and platform-specific code should be run on the relevant target — `make test` on an ARM box (e.g. a Raspberry Pi) exercises the NEON path; the Intel path is covered on x86.
 
-Feel free to open an issue to discuss larger changes first. Be kind and constructive in reviews.
+Feel free to open an issue to discuss larger changes first. Be kind and constructive in reviews. [FUTURE_DIRECTIONS.md](FUTURE_DIRECTIONS.md) lists candidate directions — and what's deliberately out of scope, so you can skip re-proposing it.
 
 ## License
 

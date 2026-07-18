@@ -51,10 +51,47 @@ bench: build/bench
 bench-scalar: build/bench_scalar
 	./build/bench_scalar $(BENCH_MB)
 
+# ---------------------------------------------------------------------------
+# Optional crypto / key-value-store tests. These link OpenSSL and libsodium
+# (RocksDB too when ROCKSDB=1). Library locations are auto-detected via brew
+# and fall back to /usr. Run: make test-crypto   (or: make test-crypto ROCKSDB=1)
+# ---------------------------------------------------------------------------
+OPENSSL_PREFIX := $(shell brew --prefix openssl@3 2>/dev/null || echo /usr)
+SODIUM_PREFIX  := $(shell brew --prefix libsodium 2>/dev/null || echo /usr)
+ROCKSDB_PREFIX := $(shell brew --prefix rocksdb 2>/dev/null || echo /usr)
+
+CRYPTO_INCLUDES = -IBaseEncodeDecode -I$(OPENSSL_PREFIX)/include -I$(SODIUM_PREFIX)/include
+CRYPTO_LINK = -L$(OPENSSL_PREFIX)/lib -lcrypto -L$(SODIUM_PREFIX)/lib -lsodium
+ifeq ($(ROCKSDB),1)
+  CRYPTO_INCLUDES += -I$(ROCKSDB_PREFIX)/include
+  CRYPTO_LINK += -L$(ROCKSDB_PREFIX)/lib -lrocksdb
+else
+  CRYPTO_DEFS = -DSNICHOLLS_NO_ROCKSDB
+endif
+
+build/test_crypto: tests/test_crypto.cpp $(HEADERS) | build
+	$(CXX) $(CXXFLAGS) $(CRYPTO_DEFS) $(CRYPTO_INCLUDES) tests/test_crypto.cpp $(CRYPTO_LINK) -o $@
+
+test-crypto: build/test_crypto
+	./build/test_crypto
+
+# The demo with the object-encryption tour (links OpenSSL + libsodium).
+build/demo_crypto: BaseEncodeDecode/main.cpp $(HEADERS) | build
+	$(CXX) $(CXXFLAGS) -DSNICHOLLS_DEMO_CRYPTO $(CRYPTO_INCLUDES) BaseEncodeDecode/main.cpp $(CRYPTO_LINK) -o $@
+
+demo-crypto: build/demo_crypto
+	./build/demo_crypto
+
+# Amalgamate the library + demo into one self-contained .cpp (for Compiler
+# Explorer or single-file distribution). Override ENTRY to amalgamate your own.
+ENTRY ?= BaseEncodeDecode/main.cpp
+amalgamate: | build
+	python3 tools/amalgamate.py $(ENTRY) -I BaseEncodeDecode -o build/single.cpp
+
 demo: build/demo
 	./build/demo
 
 clean:
 	rm -rf build
 
-.PHONY: all test bench bench-scalar demo clean
+.PHONY: all test bench bench-scalar test-crypto demo demo-crypto amalgamate clean

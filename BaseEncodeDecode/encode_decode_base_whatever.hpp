@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2024 Saxon Nicholls
+
 //
 //  encode_decode_base_whatever.hpp
 //  BaseEncodeDecode
@@ -188,18 +191,20 @@ namespace snicholls {
 
         // Build a string of exactly `size` characters, skipping the serial
         // zero-fill that resize() performs when the library supports it
-        // (C++23 resize_and_overwrite; plain resize as the C++20 fallback)
-        template<typename Fill>
-        inline std::string MakeFilledString(size_t size, Fill&& fill) {
+        // (C++23 resize_and_overwrite; plain resize as the C++20 fallback).
+        // Out is any std::basic_string<char, ...> (e.g. std::string or the
+        // wiped SecureString from utils/secure.hpp).
+        template<typename Out = std::string, typename Fill>
+        inline Out MakeFilledString(size_t size, Fill&& fill) {
 #if defined(__cpp_lib_string_resize_and_overwrite)
-            std::string output;
+            Out output;
             output.resize_and_overwrite(size, [&](char* data, size_t n) {
                 fill(data);
                 return n;
             });
             return output;
 #else
-            std::string output;
+            Out output;
             output.resize(size);
             fill(output.data());
             return output;
@@ -219,9 +224,10 @@ namespace snicholls {
 namespace snicholls {
 
     // Forward declarations: the constexpr front-ends below delegate to these
-    // chunked implementations at runtime (threadCount 1 = single-threaded)
-    template<size_t BitGroupSize, size_t AlphabetSize, const std::array<char, AlphabetSize>& Alphabet, bool PaddingRequired>
-    std::string BaseEncodeParallelBytes(const uint8_t* data, size_t size, unsigned threadCount = 0);
+    // chunked implementations at runtime (threadCount 1 = single-threaded).
+    // Out is the output string type (defaults to std::string).
+    template<typename Out, size_t BitGroupSize, size_t AlphabetSize, const std::array<char, AlphabetSize>& Alphabet, bool PaddingRequired>
+    Out BaseEncodeParallelBytes(const uint8_t* data, size_t size, unsigned threadCount = 0);
 
     template<typename Container, size_t BitGroupSize, size_t AlphabetSize, const std::array<char, AlphabetSize>& Alphabet, bool PaddingRequired>
     Container BaseDecodeParallelImpl(const char* data, size_t size, unsigned threadCount = 0);
@@ -229,17 +235,17 @@ namespace snicholls {
     // Templated function for Base Encoding. Accepts any ByteSource and reads it
     // in place. constexpr: usable at compile time, e.g.
     //   static_assert(EncodeBase64("foo") == "Zm9v");
-    template<size_t BitGroupSize, size_t AlphabetSize, const std::array<char, AlphabetSize>& Alphabet, bool PaddingRequired, ByteSource R>
-    constexpr std::string BaseEncode(const R& input) {
+    template<typename Out, size_t BitGroupSize, size_t AlphabetSize, const std::array<char, AlphabetSize>& Alphabet, bool PaddingRequired, ByteSource R>
+    constexpr Out BaseEncode(const R& input) {
         if (!std::is_constant_evaluated()) {
             // Runtime: block-unrolled chunk path with optional SIMD;
             // threadCount 1 keeps this strictly single-threaded
-            return BaseEncodeParallelBytes<BitGroupSize, AlphabetSize, Alphabet, PaddingRequired>(
+            return BaseEncodeParallelBytes<Out, BitGroupSize, AlphabetSize, Alphabet, PaddingRequired>(
                 reinterpret_cast<const uint8_t*>(std::ranges::data(input)), std::ranges::size(input), 1);
         }
 
         constexpr size_t mask = (size_t{1} << BitGroupSize) - 1;
-        std::string output;
+        Out output;
         size_t bitBuffer = 0;
         int bitBufferLength = 0;
 
@@ -269,9 +275,9 @@ namespace snicholls {
     }
 
     // Kept for compatibility: Binary is just one of the ByteSources BaseEncode accepts
-    template<size_t BitGroupSize, size_t AlphabetSize, const std::array<char, AlphabetSize>& Alphabet, bool PaddingRequired, ByteSource R>
-    constexpr std::string BaseEncodeBinary(const R& input) {
-        return BaseEncode<BitGroupSize, AlphabetSize, Alphabet, PaddingRequired>(input);
+    template<typename Out, size_t BitGroupSize, size_t AlphabetSize, const std::array<char, AlphabetSize>& Alphabet, bool PaddingRequired, ByteSource R>
+    constexpr Out BaseEncodeBinary(const R& input) {
+        return BaseEncode<Out, BitGroupSize, AlphabetSize, Alphabet, PaddingRequired>(input);
     }
 
     // Templated function for Base Decoding (string version)
@@ -444,11 +450,11 @@ namespace snicholls {
         }
     }
 
-    template<size_t BitGroupSize, size_t AlphabetSize, const std::array<char, AlphabetSize>& Alphabet, bool PaddingRequired>
-    std::string BaseEncodeParallelBytes(const uint8_t* data, size_t size, unsigned threadCount) {
+    template<typename Out, size_t BitGroupSize, size_t AlphabetSize, const std::array<char, AlphabetSize>& Alphabet, bool PaddingRequired>
+    Out BaseEncodeParallelBytes(const uint8_t* data, size_t size, unsigned threadCount) {
         // MakeFilledString avoids zeroing the buffer before it is written, and
         // worker threads first-touch the pages of their own output slices
-        return detail::MakeFilledString(EncodedLength<BitGroupSize, PaddingRequired>(size), [&](char* outData) {
+        return detail::MakeFilledString<Out>(EncodedLength<BitGroupSize, PaddingRequired>(size), [&](char* outData) {
             BaseEncodeParallelInto<BitGroupSize, AlphabetSize, Alphabet, PaddingRequired>(data, size, outData, threadCount);
         });
     }
@@ -563,15 +569,15 @@ namespace snicholls {
     }
 
     // Zero-copy adapters: any ByteSource goes straight to the workers
-    template<size_t BitGroupSize, size_t AlphabetSize, const std::array<char, AlphabetSize>& Alphabet, bool PaddingRequired, ByteSource R>
-    std::string BaseEncodeParallel(const R& input, unsigned threadCount = 0) {
-        return BaseEncodeParallelBytes<BitGroupSize, AlphabetSize, Alphabet, PaddingRequired>(
+    template<typename Out, size_t BitGroupSize, size_t AlphabetSize, const std::array<char, AlphabetSize>& Alphabet, bool PaddingRequired, ByteSource R>
+    Out BaseEncodeParallel(const R& input, unsigned threadCount = 0) {
+        return BaseEncodeParallelBytes<Out, BitGroupSize, AlphabetSize, Alphabet, PaddingRequired>(
             reinterpret_cast<const uint8_t*>(std::ranges::data(input)), std::ranges::size(input), threadCount);
     }
 
-    template<size_t BitGroupSize, size_t AlphabetSize, const std::array<char, AlphabetSize>& Alphabet, bool PaddingRequired, ByteSource R>
-    std::string BaseEncodeBinaryParallel(const R& input, unsigned threadCount = 0) {
-        return BaseEncodeParallel<BitGroupSize, AlphabetSize, Alphabet, PaddingRequired>(input, threadCount);
+    template<typename Out, size_t BitGroupSize, size_t AlphabetSize, const std::array<char, AlphabetSize>& Alphabet, bool PaddingRequired, ByteSource R>
+    Out BaseEncodeBinaryParallel(const R& input, unsigned threadCount = 0) {
+        return BaseEncodeParallel<Out, BitGroupSize, AlphabetSize, Alphabet, PaddingRequired>(input, threadCount);
     }
 
     template<size_t BitGroupSize, size_t AlphabetSize, const std::array<char, AlphabetSize>& Alphabet, bool PaddingRequired, ByteSource R>
@@ -599,9 +605,9 @@ namespace snicholls {
     // ------------------------------------------------------------------
 
 #define SNICHOLLS_DEFINE_SCHEME(Name, BitGroupSize, AlphabetSize, Alphabet, Padded) \
-    template<ByteSource R> \
-    constexpr std::string Encode##Name(const R& input) { \
-        return BaseEncode<BitGroupSize, AlphabetSize, Alphabet, Padded>(input); \
+    template<typename Out = std::string, ByteSource R> \
+    constexpr Out Encode##Name(const R& input) { \
+        return BaseEncode<Out, BitGroupSize, AlphabetSize, Alphabet, Padded>(input); \
     } \
     constexpr std::string Encode##Name(const char* input) { \
         return Encode##Name(std::string_view{input}); \
@@ -613,9 +619,9 @@ namespace snicholls {
     constexpr std::string Decode##Name(const char* input) { \
         return Decode##Name(std::string_view{input}); \
     } \
-    template<ByteSource R> \
-    constexpr std::string Encode##Name##Binary(const R& input) { \
-        return BaseEncode<BitGroupSize, AlphabetSize, Alphabet, Padded>(input); \
+    template<typename Out = std::string, ByteSource R> \
+    constexpr Out Encode##Name##Binary(const R& input) { \
+        return BaseEncode<Out, BitGroupSize, AlphabetSize, Alphabet, Padded>(input); \
     } \
     template<ByteSource R> \
     constexpr Binary Decode##Name##Binary(const R& input) { \
@@ -624,9 +630,9 @@ namespace snicholls {
     constexpr Binary Decode##Name##Binary(const char* input) { \
         return Decode##Name##Binary(std::string_view{input}); \
     } \
-    template<ByteSource R> \
-    std::string Encode##Name##Parallel(const R& input, unsigned threadCount = 0) { \
-        return BaseEncodeParallel<BitGroupSize, AlphabetSize, Alphabet, Padded>(input, threadCount); \
+    template<typename Out = std::string, ByteSource R> \
+    Out Encode##Name##Parallel(const R& input, unsigned threadCount = 0) { \
+        return BaseEncodeParallel<Out, BitGroupSize, AlphabetSize, Alphabet, Padded>(input, threadCount); \
     } \
     inline std::string Encode##Name##Parallel(const char* input, unsigned threadCount = 0) { \
         return Encode##Name##Parallel(std::string_view{input}, threadCount); \
@@ -638,9 +644,9 @@ namespace snicholls {
     inline std::string Decode##Name##Parallel(const char* input, unsigned threadCount = 0) { \
         return Decode##Name##Parallel(std::string_view{input}, threadCount); \
     } \
-    template<ByteSource R> \
-    std::string Encode##Name##BinaryParallel(const R& input, unsigned threadCount = 0) { \
-        return BaseEncodeParallel<BitGroupSize, AlphabetSize, Alphabet, Padded>(input, threadCount); \
+    template<typename Out = std::string, ByteSource R> \
+    Out Encode##Name##BinaryParallel(const R& input, unsigned threadCount = 0) { \
+        return BaseEncodeParallel<Out, BitGroupSize, AlphabetSize, Alphabet, Padded>(input, threadCount); \
     } \
     template<ByteSource R> \
     Binary Decode##Name##BinaryParallel(const R& input, unsigned threadCount = 0) { \

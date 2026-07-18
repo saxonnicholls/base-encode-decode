@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2024 Saxon Nicholls
+
 //
 //  test_main.cpp
 //  BaseEncodeDecode test suite
@@ -35,6 +38,10 @@
 #include "encode_decode_dna.hpp"
 #include "encode_decode_object.hpp"
 #include "utils/stl_support.hpp"
+#include "utils/secure.hpp"
+#include "utils/fixed_string.hpp"
+#include "utils/overloaded.hpp"
+#include "utils/type_registry.hpp"
 #include "encode_decode_web.hpp"
 #include "base64.h" // ReneNyffenegger/cpp-base64 reference implementation
 
@@ -950,6 +957,108 @@ static void TestStlSupport() {
 }
 
 // ---------------------------------------------------------------------------
+// 4l. Secure-memory utilities (utils/secure.hpp)
+// ---------------------------------------------------------------------------
+static void TestSecure() {
+    // SecureWipe zeroes a buffer
+    Binary scratch{1, 2, 3, 4, 5};
+    SecureWipe(scratch.data(), scratch.size());
+    for (uint8_t b : scratch) assert(b == 0);
+    SecureWipe(nullptr, 0); // no-op, must not crash
+
+    Rng rng;
+    const Binary secret = rng.bytes(48);
+
+    // SecureBytes is a drop-in for Binary: same content encodes identically,
+    // across schemes, as a ByteSource with no copy
+    SecureBytes sb(secret.begin(), secret.end());
+    assert(sb.size() == secret.size());
+    assert(EncodeBase64(sb) == EncodeBase64Binary(secret));
+    assert(EncodeBase32(sb) == EncodeBase32Binary(secret));
+    assert(EncodeBase16(sb) == EncodeBase16Binary(secret));
+    // Full vector API works (push_back, resize, iterators)
+    sb.push_back(0xAB);
+    assert(sb.size() == secret.size() + 1 && sb.back() == 0xAB);
+
+    // Decode*Secure decodes into wiped storage, matching the plain decoder
+    const std::string b64 = EncodeBase64Binary(secret);
+    const SecureBytes decoded = DecodeBase64Secure(b64);
+    assert(decoded.size() == secret.size());
+    assert(std::equal(decoded.begin(), decoded.end(), secret.begin()));
+    // A different scheme, and the const char* overload
+    assert(DecodeBase32Secure(EncodeBase32Binary(secret).c_str()).size() == secret.size());
+
+    // SecureString drop-in for std::string, usable as a ByteSource
+    SecureString ss = "passphrase";
+    assert(EncodeBase64(ss) == EncodeBase64(std::string("passphrase")));
+
+    // Encoders can target the output type: encode a secret straight into wiped
+    // storage (no std::string intermediate), across schemes and parallel forms
+    const SecureString enc64 = EncodeBase64Binary<SecureString>(secret);
+    assert(enc64.size() == EncodeBase64Binary(secret).size());
+    assert(std::equal(enc64.begin(), enc64.end(), EncodeBase64Binary(secret).begin()));
+    const SecureBytes sbFresh(secret.begin(), secret.end());
+    const SecureString enc32 = EncodeBase32<SecureString>(sbFresh);
+    assert(std::equal(enc32.begin(), enc32.end(), EncodeBase32Binary(secret).begin()));
+    const SecureString encPar = EncodeBase64BinaryParallel<SecureString>(secret, 2);
+    assert(std::equal(encPar.begin(), encPar.end(), EncodeBase64Binary(secret).begin()));
+    // Full loop with no plaintext std::string anywhere:
+    const SecureBytes roundTrip = DecodeBase64Secure(enc64);
+    assert(roundTrip.size() == secret.size());
+    assert(std::equal(roundTrip.begin(), roundTrip.end(), secret.begin()));
+
+    // ConstantTimeEqual
+    const Binary a{1, 2, 3, 4};
+    const Binary bEq{1, 2, 3, 4};
+    const Binary bNe{1, 2, 3, 5};
+    assert(ConstantTimeEqual(a.data(), bEq.data(), a.size()));
+    assert(!ConstantTimeEqual(a.data(), bNe.data(), a.size()));
+    assert(ConstantTimeEqual(std::span<const uint8_t>(a), std::span<const uint8_t>(bEq)));
+    assert(!ConstantTimeEqual(std::span<const uint8_t>(a), std::span<const uint8_t>(bNe)));
+    const Binary shorter{1, 2, 3};
+    assert(!ConstantTimeEqual(std::span<const uint8_t>(a), std::span<const uint8_t>(shorter)));
+
+    // SecureSTL: standard containers on the wiping allocator have the identical
+    // API and compose with the object serializer
+    SecureVector<int> sv{1, 2, 3};
+    sv.push_back(4); // exercises reallocation (old buffer wiped by the allocator)
+    assert((sv == SecureVector<int>{1, 2, 3, 4}));
+    assert((DecodeBase64Object<SecureVector<int>>(EncodeBase64Object(sv)) == sv));
+
+    SecureMap<std::string, int> sm{{"a", 1}, {"b", 2}};
+    assert(sm.at("a") == 1 && sm.size() == 2);
+    assert((DecodeBase64Object<SecureMap<std::string, int>>(EncodeBase64Object(sm)) == sm));
+
+    SecureList<uint8_t> sl{9, 8, 7};
+    assert((DecodeBase64Object<SecureList<uint8_t>>(EncodeBase64Object(sl)) == sl));
+
+    // Fully-wiped nesting: element type is itself Secure
+    SecureVector<SecureString> nested;
+    nested.emplace_back("one");
+    nested.emplace_back("two");
+    assert(nested.size() == 2 && nested[1] == "two");
+
+    // IsSecure<T> is composable, verified at compile time
+    static_assert(IsSecure<int>::value);                              // no heap to leak
+    static_assert(IsSecureV<SecureBytes>);
+    static_assert(IsSecureV<SecureString>);
+    static_assert(!IsSecureV<std::string>);
+    static_assert(!IsSecureV<Binary>);                               // std::vector<uint8_t>
+    static_assert(IsSecureV<SecureVector<int>>);
+    static_assert(IsSecureV<SecureVector<SecureString>>);            // fully secure nesting
+    static_assert(!IsSecureV<SecureVector<std::string>>);           // elements not secure
+    static_assert(IsSecureV<SecureMap<SecureString, int>>);
+    static_assert(!IsSecureV<SecureMap<std::string, int>>);         // key not secure
+    static_assert(IsSecureV<std::pair<SecureString, int>>);
+    static_assert(!IsSecureV<std::pair<std::string, int>>);
+    static_assert(IsSecureV<std::optional<SecureBytes>>);
+    static_assert(!IsSecureV<std::variant<int, std::string>>);
+    static_assert(SecureStorage<SecureVector<SecureString>>);        // concept form
+
+    std::puts("Secure-memory utilities + SecureSTL + IsSecure trait: OK");
+}
+
+// ---------------------------------------------------------------------------
 // 4h. Web adapter: data URIs and HTTP Basic auth
 // ---------------------------------------------------------------------------
 static void TestWebAdapter() {
@@ -1152,6 +1261,80 @@ static void TestBitstring() {
 #endif
 
 // ---------------------------------------------------------------------------
+// 4m. Compile-time fixed_string + type registry: runtime name -> construct and
+//     dispatch the right type, with no variant, base class, or switch.
+// ---------------------------------------------------------------------------
+static_assert(fixed_string("abc").size() == 3);
+static_assert(fixed_string("abc") == "abc");
+static_assert((fixed_string("ab") + fixed_string("cd")) == "abcd");
+static_assert(fixed_string("hello").substr<1, 3>() == "ell");
+
+namespace {
+    struct Ping { uint32_t seq; bool operator==(const Ping&) const = default; };
+    struct Pong { double when; bool operator==(const Pong&) const = default; };
+    struct Note { std::string text; bool operator==(const Note&) const = default; }; // non-trivial
+}
+
+namespace snicholls {
+    // A user type that owns heap data needs a serializer; then it works in the
+    // registry exactly like the trivially-copyable types.
+    template<> struct ObjectSerializer<Note> {
+        static Binary to_bytes(const Note& n) {
+            Binary out; ByteWriter w{out}; w.element<std::string>(n.text); return out;
+        }
+        static Note from_bytes(std::span<const uint8_t> b) {
+            ByteReader r{b}; return Note{ r.element<std::string>() };
+        }
+    };
+}
+
+using DemoRegistry = TypeRegistry<
+    Named<"ping", Ping>,
+    Named<"pong", Pong>,
+    Named<"note", Note>>;
+
+static_assert(DemoRegistry::count == 3);
+static_assert(DemoRegistry::contains("pong") && !DemoRegistry::contains("nope"));
+static_assert(DemoRegistry::nameOf<Pong>() == "pong");
+
+static void TestTypeRegistry() {
+    // Reverse: object -> { registered name, Base64 }
+    const Note note{"remember the milk"};
+    const auto [name, serial] = DemoRegistry::serialize(note);
+    assert(name == "note");
+
+    // Forward: runtime name + serialised string -> reconstruct -> dispatch to a
+    // per-type handler via `overloaded` (no if constexpr, no switch, no variant).
+    Note gotNote; Ping gotPing{}; int routed = 0;
+    const bool handled = DemoRegistry::dispatch(name, serial, overloaded{
+        [&](Ping&& p) { gotPing = p; ++routed; },
+        [&](Pong&&)   { ++routed; },
+        [&](Note&& n) { gotNote = std::move(n); ++routed; },
+    });
+    assert(handled && routed == 1 && gotNote == note);
+
+    // A trivially-copyable type through the same registry
+    const auto [pname, pserial] = DemoRegistry::serialize(Ping{42});
+    Ping p2{};
+    DemoRegistry::dispatch(pname, pserial, overloaded{
+        [&](Ping&& p) { p2 = p; }, [&](Pong&&) {}, [&](Note&&) {},
+    });
+    assert(p2.seq == 42);
+
+    // Unknown name -> not handled, no throw
+    assert(!DemoRegistry::dispatch("mystery", serial, [](auto&&) {}));
+
+    // A custom deserialiser (any format) drops in without a base class
+    bool viaCustom = false;
+    DemoRegistry::dispatch("note", serial,
+        [&](auto&& obj) { if constexpr (std::is_same_v<std::decay_t<decltype(obj)>, Note>) viaCustom = (obj == note); },
+        []<typename T>(std::type_identity<T>, std::string_view s) { return DecodeBase64Object<T>(s); });
+    assert(viaCustom);
+
+    std::puts("Type registry (compile-time name -> type dispatch, no variant/switch): OK");
+}
+
+// ---------------------------------------------------------------------------
 int main() {
 #if defined(SNICHOLLS_SIMD_INTEL)
     std::puts("SIMD: Intel SSSE3 kernels active");
@@ -1173,6 +1356,8 @@ int main() {
     TestDna();
     TestObject();
     TestStlSupport();
+    TestSecure();
+    TestTypeRegistry();
 #ifdef TEST_FORMAT_ADAPTER
     TestFormatAdapter();
 #endif

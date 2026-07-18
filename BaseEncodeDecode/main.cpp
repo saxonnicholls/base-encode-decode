@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2024 Saxon Nicholls
+
 //
 //  main.cpp
 //  BaseEncodeDecode
@@ -13,6 +16,14 @@
 #include "encode_decode_dna.hpp"
 #include "encode_decode_object.hpp"
 #include "utils/stl_support.hpp"
+
+// The object-encryption tour is opt-in so the default demo stays dependency-free
+// (the Xcode project and `make demo` link no crypto library). Build it with the
+// crypto libraries via `make demo-crypto`.
+#ifdef SNICHOLLS_DEMO_CRYPTO
+#include "utils/encryption_sodium.hpp"
+#include "utils/secure.hpp"
+#endif
 
 // The serial path is constexpr: the compiler verifies these while building
 static_assert(snicholls::EncodeBase64("Hello, World!") == "SGVsbG8sIFdvcmxkIQ==");
@@ -289,6 +300,113 @@ void ObjectDemo() {
               << " (" << restored.size() << " entries)" << std::endl;
 }
 
+#ifdef SNICHOLLS_DEMO_CRYPTO
+// A user type that owns heap data (so it needs a custom ObjectSerializer, not
+// the trivially-copyable default). Once it has one, it composes into any nesting
+// of standard containers automatically.
+struct Account {
+    std::string name;
+    uint64_t balance;
+    std::vector<std::string> tags;
+    bool operator==(const Account&) const = default;
+};
+
+namespace snicholls {
+    template<> struct ObjectSerializer<Account> {
+        static Binary to_bytes(const Account& a) {
+            Binary out;
+            ByteWriter w{out};
+            w.element<std::string>(a.name);
+            w.element<uint64_t>(a.balance);
+            w.element<std::vector<std::string>>(a.tags);
+            return out;
+        }
+        static Account from_bytes(std::span<const uint8_t> bytes) {
+            ByteReader r{bytes};
+            Account a;
+            a.name = r.element<std::string>();
+            a.balance = r.element<uint64_t>();
+            a.tags = r.element<std::vector<std::string>>();
+            return a;
+        }
+    };
+}
+
+// A tour de force: a deeply nested object, serialised -> encrypted -> Base64
+// -> (transport) -> Base64-decoded -> decrypted -> deserialised -> compared.
+void EncryptionDemo() {
+    using namespace snicholls;
+
+    // Five container levels wrapping the custom Account type:
+    //   L1 map< string,
+    //   L2   vector< pair< uint32_t,
+    //   L3     map< string,
+    //   L4       vector<
+    //   L5         Account > > > > >
+    using L1 = std::map<std::string,
+                 std::vector<std::pair<uint32_t,
+                   std::map<std::string,
+                     std::vector<Account>>>>>;
+
+    const L1 original = {
+        {"region:emea", {
+            {1001, {{"gbp", {{"Alice", 4200, {"vip", "kyc"}}, {"Bob", 75, {}}}},
+                    {"eur", {{"Chloe", 999999, {"whale", "kyc", "staff"}}}}}},
+            {1002, {{"gbp", {{"Dan", 0, {"dormant"}}}}}},
+        }},
+        {"region:apac", {
+            {2001, {{"aud", {{"Evie", 33330, {"vip"}}}},
+                    {"jpy", {{"Fumi", 128, {"kyc"}}, {"Gus", 512, {"kyc", "vip"}}}}}},
+        }},
+    };
+
+    // Count the leaves so the reader sees this is a real, chunky object.
+    size_t accounts = 0, tags = 0;
+    for (auto& [region, buckets] : original)
+        for (auto& [id, ccymap] : buckets)
+            for (auto& [ccy, accts] : ccymap)
+                for (auto& acct : accts) { ++accounts; tags += acct.tags.size(); }
+
+    std::cout << "Object: 5-level map<string, vector<pair<u32, map<string, vector<Account>>>>>\n";
+    std::cout << "  " << original.size() << " regions, " << accounts
+              << " Account leaves, " << tags << " tags total" << std::endl;
+
+    // 1. Serialise the whole graph into wiped storage.
+    Binary serialised = ObjectSerializer<L1>::to_bytes(original);
+    SecureBytes plaintext(serialised.begin(), serialised.end());
+    SecureWipe(serialised.data(), serialised.size());
+    std::cout << "  1. serialise ............. " << plaintext.size() << " bytes" << std::endl;
+
+    // 2. Encrypt (authenticated).
+    SecureBytes key = SodiumEncryptor::generateKey();
+    SodiumEncryptor cipher(key);
+    SecureBytes encrypted = cipher.encrypt(plaintext);
+    std::cout << "  2. encrypt (" << cipher.algorithm() << ") " << encrypted.size()
+              << " bytes (+nonce +tag)" << std::endl;
+
+    // 3. Base64 for transport / storage (ciphertext, so a std::string is fine).
+    const std::string b64 = EncodeBase64Binary(encrypted);
+    std::cout << "  3. Base64 ................ " << b64.size() << " chars: "
+              << b64.substr(0, 44) << "..." << std::endl;
+
+    // 4. The full reverse: decode -> decrypt -> deserialise -> reconstruct.
+    SecureBytes encrypted2 = DecodeBase64Secure(b64);
+    SecureBytes plaintext2 = cipher.decrypt(encrypted2); // throws if tampered / wrong key
+    const L1 reconstructed = ObjectSerializer<L1>::from_bytes(plaintext2);
+    std::cout << "  4. decode -> decrypt -> deserialise" << std::endl;
+
+    // 5. Compare the reconstructed graph with the original.
+    std::cout << "  5. reconstructed == original: "
+              << (reconstructed == original ? "YES - identical" : "NO - BUG!") << std::endl;
+
+    // A wrong key is rejected, proving the ciphertext is authenticated.
+    SodiumEncryptor wrong(SodiumEncryptor::generateKey());
+    bool rejected = false;
+    try { (void)wrong.decrypt(encrypted); } catch (const EncryptionError&) { rejected = true; }
+    std::cout << "  +  wrong key rejected: " << (rejected ? "yes" : "NO - BUG!") << std::endl;
+}
+#endif // SNICHOLLS_DEMO_CRYPTO
+
 // Main function
 int main() {
     std::cout << "String Encoding/Decoding Demo:" << std::endl;
@@ -309,6 +427,11 @@ int main() {
 #ifdef SNICHOLLS_HAS_BITSTRING
     std::cout << "\nBSD <bitstring.h> Interop Demo:" << std::endl;
     BitstringDemo();
+#endif
+
+#ifdef SNICHOLLS_DEMO_CRYPTO
+    std::cout << "\nObject Encryption Demo (serialise -> encrypt -> Base64 -> ... -> compare):" << std::endl;
+    EncryptionDemo();
 #endif
 
     return 0;
