@@ -59,6 +59,8 @@
 #define TEST_JSON_ADAPTER 1
 #endif
 
+#include "encode_decode_ml.hpp" // after json so the optional JSON view enables
+
 #include <sstream>
 
 using namespace snicholls;
@@ -452,7 +454,19 @@ static void TestJsonAdapter() {
     assert(threw);
     (void)threw;
 
-    std::puts("nlohmann::json adapter (Binary <-> Base64): OK");
+    // A whole JSON document rides the object pipeline via CBOR (portable).
+    const nlohmann::json doc = {
+        {"model", "llama"},
+        {"layers", 32},
+        {"temps", {0.1, 0.7, 1.0}},
+        {"nested", {{"a", 1}, {"b", {true, false, nullptr}}}},
+    };
+    assert(DecodeBase64Object<nlohmann::json>(EncodeBase64Object(doc)) == doc);
+    assert(DecodeBase32Object<nlohmann::json>(EncodeBase32Object(doc)) == doc);
+    // The object bytes are exactly nlohmann's own CBOR framing
+    assert(ObjectSerializer<nlohmann::json>::to_bytes(doc) == nlohmann::json::to_cbor(doc));
+
+    std::puts("nlohmann::json adapter (Binary <-> Base64 + JSON-as-object via CBOR): OK");
 }
 #endif
 
@@ -1335,6 +1349,117 @@ static void TestTypeRegistry() {
 }
 
 // ---------------------------------------------------------------------------
+// ML tensor representation: dtype metadata, sub-byte lane packing, a Tensor /
+// Model riding the object pipeline, opaque GGML-style passthrough, JSON view.
+// ---------------------------------------------------------------------------
+static void TestMachineLearning() {
+    using namespace snicholls::ml;
+
+    // dtype metadata / name round trips (safetensors-aligned)
+    static_assert(BitsPerElement(Dtype::F32) == 32);
+    static_assert(BitsPerElement(Dtype::I4) == 4);
+    static_assert(BitsPerElement(Dtype::U1) == 1);
+    static_assert(IsSubByte(Dtype::I4) && !IsSubByte(Dtype::F16));
+    for (int i = 0; i <= static_cast<int>(Dtype::Opaque); ++i) {
+        const auto d = static_cast<Dtype>(i);
+        assert(DtypeFromName(DtypeName(d)) == d);
+    }
+    assert(DtypeName(Dtype::F8_E4M3) == "F8_E4M3");
+    assert(NumpyTypestr(Dtype::F32) == "<f4" && NumpyTypestr(Dtype::BF16).empty());
+
+    // Sub-byte lane packing: density + MSB-first order + round trip
+    {
+        const std::vector<uint8_t> nibbles = {0x0, 0xF, 0x3, 0xA, 0x5}; // 5 int4 values
+        const Binary packed = PackBits(nibbles, 4);
+        assert(packed.size() == 3);            // ceil(5/2)
+        assert(packed[0] == 0x0F);             // first value high nibble
+        assert(UnpackBits(packed, 5, 4) == nibbles);
+
+        const std::vector<uint8_t> bits = {1, 0, 1, 1, 0, 0, 1}; // 7 x 1-bit
+        const Binary packed1 = PackBits(bits, 1);
+        assert(packed1.size() == 1 && packed1[0] == 0b10110010);
+        assert(UnpackBits(packed1, 7, 1) == bits);
+    }
+
+    // A float layer -> Tensor -> Base64 object -> back
+    {
+        const std::vector<float> w = {1.0f, -2.5f, 3.14159f, 0.0f, 42.0f, -0.5f};
+        const Tensor t = Tensor::From<float>("mlp.weight", {2, 3}, w);
+        assert(t.dtype == Dtype::F32 && t.shape == std::vector<int64_t>({2, 3}));
+        assert(t.ElementCount() == 6 && t.Valid());
+        assert(t.ToVector<float>() == w);
+
+        const std::string b64 = EncodeBase64Object(t);
+        const Tensor back = DecodeBase64Object<Tensor>(b64);
+        assert(back == t && back.ToVector<float>() == w);
+        // dtype mismatch is caught
+        bool threw = false;
+        try { (void)t.ToVector<double>(); } catch (const std::invalid_argument&) { threw = true; }
+        assert(threw);
+    }
+
+    // A sub-byte (int4) quantised layer round-trips through the pipeline
+    {
+        const std::vector<uint8_t> q = {0, 1, 2, 15, 8, 7, 3};
+        const Tensor t = Tensor::FromLanes("attn.q", Dtype::I4, {7}, q);
+        assert(t.data.size() == 4 && t.Valid());          // ceil(7/2)
+        const Tensor back = DecodeBase32Object<Tensor>(EncodeBase32Object(t));
+        assert(back == t && back.Lanes() == q);
+    }
+
+    // F16 element bytes carried raw (no native type needed)
+    {
+        const Binary halfBytes = {0x00, 0x3C, 0x00, 0xC0}; // 1.0, -2.0 in IEEE half
+        const Tensor t = Tensor::FromRaw("norm", Dtype::F16, {2}, halfBytes);
+        assert(t.Valid() && t.data == halfBytes);
+        assert(DecodeBase64Object<Tensor>(EncodeBase64Object(t)) == t);
+    }
+
+    // Opaque GGML-style block-quant passthrough: byte-for-byte faithful
+    {
+        Binary block(210); // e.g. a Q6_K super-block's worth of bytes
+        for (size_t i = 0; i < block.size(); ++i) block[i] = static_cast<uint8_t>(i * 7 + 1);
+        const Tensor t = Tensor::Opaque("blk.0.ffn", "Q6_K", {256}, block);
+        assert(t.dtype == Dtype::Opaque && t.quant == "Q6_K" && t.Valid());
+        const Tensor back = DecodeBase64Object<Tensor>(EncodeBase64Object(t));
+        assert(back == t && back.data == block);
+    }
+
+    // A whole Model (state_dict) as one Base64 string, via the vector serialiser
+    {
+        const Model model = {
+            Tensor::From<float>("w1", {2}, std::vector<float>{1.f, 2.f}),
+            Tensor::From<int32_t>("b1", {2}, std::vector<int32_t>{7, -7}),
+            Tensor::Opaque("w2", "Q4_K", {32}, Binary{1, 2, 3, 4, 5}),
+        };
+        const Model back = DecodeBase64UrlObject<Model>(EncodeBase64UrlObject(model));
+        assert(back == model);
+        assert(Find(back, "b1") != nullptr && Find(back, "b1")->ToVector<int32_t>()[0] == 7);
+        assert(Find(back, "missing") == nullptr);
+    }
+
+#ifdef TEST_JSON_ADAPTER
+    // JSON view: the numpy/torch-friendly { name, dtype, shape, data(base64) }
+    {
+        const Tensor t = Tensor::From<float>("layer.w", {2, 2},
+                                             std::vector<float>{1.f, 2.f, 3.f, 4.f});
+        const nlohmann::json j = t;
+        assert(j["dtype"] == "F32");
+        assert(j["shape"] == nlohmann::json::array({2, 2}));
+        assert(j["data"].is_string()); // Base64, not an int array
+        assert(j.get<Tensor>() == t);
+
+        // Opaque carries its quant tag through JSON too
+        const nlohmann::json jq = Tensor::Opaque("q", "Q4_K", {8}, Binary{9, 9, 9});
+        assert(jq["dtype"] == "OPAQUE" && jq["quant"] == "Q4_K");
+        assert(jq.get<Tensor>().quant == "Q4_K");
+    }
+#endif
+
+    std::puts("ML tensors (dtype, sub-byte packing, Model pipeline, GGML passthrough): OK");
+}
+
+// ---------------------------------------------------------------------------
 int main() {
 #if defined(SNICHOLLS_SIMD_INTEL)
     std::puts("SIMD: Intel SSSE3 kernels active");
@@ -1358,6 +1483,7 @@ int main() {
     TestStlSupport();
     TestSecure();
     TestTypeRegistry();
+    TestMachineLearning();
 #ifdef TEST_FORMAT_ADAPTER
     TestFormatAdapter();
 #endif

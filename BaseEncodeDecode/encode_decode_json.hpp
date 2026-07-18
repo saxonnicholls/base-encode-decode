@@ -68,4 +68,37 @@ namespace nlohmann {
 
 } // namespace nlohmann
 
+// ---------------------------------------------------------------------------
+// A whole JSON document as an ObjectSerializable value.
+//
+// When the object-serialisation layer is also present - include
+// "encode_decode_object.hpp" BEFORE this header - a nlohmann::json document
+// becomes a first-class citizen of the object pipeline. It serialises through
+// CBOR (nlohmann's compact, endian-defined binary form), so a json document
+// rides *everything* the library already offers with no bespoke code path:
+//
+//      nlohmann::json cfg = ...;
+//      std::string s = snicholls::EncodeBase64UrlObject(cfg);   // JSON in a URL
+//      auto back     = snicholls::DecodeBase64UrlObject<nlohmann::json>(s);
+//      PutObjectEncrypted(kv, "config", cfg, cipher);           // encrypted JSON
+//
+// Because CBOR fixes the byte order, this route is portable across machines -
+// unlike the host-endian trivially-copyable snapshots the primary template makes.
+// ---------------------------------------------------------------------------
+#ifdef encode_decode_object_hpp
+namespace snicholls {
+
+    template<>
+    struct ObjectSerializer<nlohmann::json> {
+        static Binary to_bytes(const nlohmann::json& j) {
+            return nlohmann::json::to_cbor(j);
+        }
+        static nlohmann::json from_bytes(std::span<const uint8_t> bytes) {
+            return nlohmann::json::from_cbor(bytes.begin(), bytes.end());
+        }
+    };
+
+} // namespace snicholls
+#endif // encode_decode_object_hpp
+
 #endif /* encode_decode_json_hpp */

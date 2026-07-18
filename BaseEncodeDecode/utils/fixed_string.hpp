@@ -105,12 +105,27 @@ namespace snicholls {
     template<typename CharT, std::size_t N>
     basic_fixed_string(const CharT (&)[N]) -> basic_fixed_string<CharT, N - 1>;
 
-    // Convenience aliases mirroring the standard character-type family.
-    template<std::size_t N> using fixed_string = basic_fixed_string<char, N>;
-    template<std::size_t N> using wfixed_string = basic_fixed_string<wchar_t, N>;
-    template<std::size_t N> using u8fixed_string = basic_fixed_string<char8_t, N>;
-    template<std::size_t N> using u16fixed_string = basic_fixed_string<char16_t, N>;
-    template<std::size_t N> using u32fixed_string = basic_fixed_string<char32_t, N>;
+    // Convenience wrappers mirroring the standard character-type family. These
+    // are class templates (each deriving from basic_fixed_string and carrying its
+    // own deduction guide) rather than alias templates, because alias-template
+    // CTAD (P1814) is not supported by every clang release - so `fixed_string("abc")`
+    // must deduce through a real class template. basic_fixed_string above remains
+    // the type to name for non-type template parameters (Tag<"object1">).
+#define SNICHOLLS_FIXED_STRING_WRAPPER(Name, CharT)                             \
+    template<std::size_t N>                                                     \
+    struct Name : basic_fixed_string<CharT, N> {                               \
+        using basic_fixed_string<CharT, N>::basic_fixed_string;                \
+        constexpr Name(const basic_fixed_string<CharT, N>& base) noexcept      \
+            : basic_fixed_string<CharT, N>(base) {}                            \
+    };                                                                          \
+    template<std::size_t N> Name(const CharT (&)[N]) -> Name<N - 1>;
+
+    SNICHOLLS_FIXED_STRING_WRAPPER(fixed_string, char)
+    SNICHOLLS_FIXED_STRING_WRAPPER(wfixed_string, wchar_t)
+    SNICHOLLS_FIXED_STRING_WRAPPER(u8fixed_string, char8_t)
+    SNICHOLLS_FIXED_STRING_WRAPPER(u16fixed_string, char16_t)
+    SNICHOLLS_FIXED_STRING_WRAPPER(u32fixed_string, char32_t)
+#undef SNICHOLLS_FIXED_STRING_WRAPPER
 }
 
 // Hashing, so a fixed string can key an unordered container.
