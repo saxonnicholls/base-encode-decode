@@ -37,14 +37,15 @@ jobs:
             cxx: clang++
             simd: ARM NEON
             extra: ""
-          # Apple clang on both architectures (macos-latest is arm64, macos-13 is x86).
+          # Apple clang on both architectures (macos-latest is arm64,
+          # macos-15-intel is the last free x86 image, supported to Aug 2027).
           - name: macos-arm-clang
             os: macos-latest
             cxx: clang++
             simd: ARM NEON
             extra: ""
           - name: macos-x86-clang
-            os: macos-13
+            os: macos-15-intel
             cxx: clang++
             simd: Intel SSSE3
             extra: -mssse3
