@@ -23,31 +23,31 @@ The emphasis here is on **simplicity**. The library is a handful of headers you 
 
 To drop the library into a project, copy the `BaseEncodeDecode` headers you need:
 
-| File                                | Role                                                        |
-| ----------------------------------- | ----------------------------------------------------------- |
-| `encode_decode_base_whatever.hpp` | the library (include this)                                  |
-| `alphabet.hpp`                    | the encoding alphabets                                      |
-| `encode_decode_simd_intel.hpp`    | x86 SSSE3 kernels (auto-included; optional)                 |
-| `encode_decode_simd_arm.hpp`      | AArch64 NEON kernels (auto-included; optional)              |
-| `encode_decode_stream.hpp`        | adapter: constant-memory streaming (files, sockets)         |
-| `encode_decode_mmap.hpp`          | adapter: memory-mapped whole-file encode/decode (zero-copy) |
-| `encode_decode_format.hpp`        | adapter:`std::format` support                             |
-| `encode_decode_web.hpp`           | adapter: data URIs, HTTP Basic auth                         |
-| `encode_decode_bitset.hpp`        | adapter:`std::bitset` (portable bit arrays)               |
-| `encode_decode_bitstring.hpp`     | adapter: BSD`<bitstring.h>` bit arrays                    |
-| `encode_decode_dna.hpp`           | adapter: DNA/RNA 2-bit and 4-bit (IUPAC) packing            |
-| `encode_decode_object.hpp`        | adapter: serialise an object (trait-based, extensible)      |
-| `utils/stl_support.hpp`           | adapter add-on: ObjectSerializer for the STL container zoo  |
-| `utils/fixed_string.hpp`          | util: compile-time `fixed_string` (NTTP-usable) |
-| `utils/overloaded.hpp`            | util: lambda-overload-set helper (per-type handlers) |
-| `utils/type_registry.hpp`         | util: name → type construct-and-dispatch (no variant/base/switch) |
-| `utils/secure.hpp`                | util: wiped-memory `SecureBytes`/`SecureString`, `IsSecure<T>`, constant-time compare |
-| `utils/encryption.hpp`            | util: general pure-virtual `Encryptor` interface (authenticated) |
-| `utils/encryption_openssl.hpp`    | drop-in: AES-256-GCM (auto-enabled with OpenSSL) |
-| `utils/encryption_sodium.hpp`     | drop-in: XChaCha20-Poly1305 + Argon2id (auto-enabled with libsodium) |
-| `utils/key_value_store.hpp`       | util: `KeyValueStoreInterface` + in-memory + object save/load (plain or encrypted) |
-| `utils/kv_rocksdb.hpp`            | drop-in: RocksDB `KeyValueStoreInterface` (auto-enabled with RocksDB) |
-| `encode_decode_json.hpp`          | adapter: nlohmann::json (`Binary` as Base64 strings)      |
+| File                                | Role                                                                                       |
+| ----------------------------------- | ------------------------------------------------------------------------------------------ |
+| `encode_decode_base_whatever.hpp` | the library (include this)                                                                 |
+| `alphabet.hpp`                    | the encoding alphabets                                                                     |
+| `encode_decode_simd_intel.hpp`    | x86 SSSE3 kernels (auto-included; optional)                                                |
+| `encode_decode_simd_arm.hpp`      | AArch64 NEON kernels (auto-included; optional)                                             |
+| `encode_decode_stream.hpp`        | adapter: constant-memory streaming (files, sockets)                                        |
+| `encode_decode_mmap.hpp`          | adapter: memory-mapped whole-file encode/decode (zero-copy)                                |
+| `encode_decode_format.hpp`        | adapter:`std::format` support                                                            |
+| `encode_decode_web.hpp`           | adapter: data URIs, HTTP Basic auth                                                        |
+| `encode_decode_bitset.hpp`        | adapter:`std::bitset` (portable bit arrays)                                              |
+| `encode_decode_bitstring.hpp`     | adapter: BSD`<bitstring.h>` bit arrays                                                   |
+| `encode_decode_dna.hpp`           | adapter: DNA/RNA 2-bit and 4-bit (IUPAC) packing                                           |
+| `encode_decode_object.hpp`        | adapter: serialise an object (trait-based, extensible)                                     |
+| `utils/stl_support.hpp`           | adapter add-on: ObjectSerializer for the STL container zoo                                 |
+| `utils/fixed_string.hpp`          | util: compile-time`fixed_string` (NTTP-usable)                                           |
+| `utils/overloaded.hpp`            | util: lambda-overload-set helper (per-type handlers)                                       |
+| `utils/type_registry.hpp`         | util: name → type construct-and-dispatch (no variant/base/switch)                         |
+| `utils/secure.hpp`                | util: wiped-memory`SecureBytes`/`SecureString`, `IsSecure<T>`, constant-time compare |
+| `utils/encryption.hpp`            | util: general pure-virtual`Encryptor` interface (authenticated)                          |
+| `utils/encryption_openssl.hpp`    | drop-in: AES-256-GCM (auto-enabled with OpenSSL)                                           |
+| `utils/encryption_sodium.hpp`     | drop-in: XChaCha20-Poly1305 + Argon2id (auto-enabled with libsodium)                       |
+| `utils/key_value_store.hpp`       | util:`KeyValueStoreInterface` + in-memory + object save/load (plain or encrypted)        |
+| `utils/kv_rocksdb.hpp`            | drop-in: RocksDB`KeyValueStoreInterface` (auto-enabled with RocksDB)                     |
+| `encode_decode_json.hpp`          | adapter: nlohmann::json (`Binary` as Base64 strings)                                     |
 
 Adapters are included explicitly and only when you want them; the SIMD headers may simply be omitted (the library falls back to scalar). Requires C++20 (C++23 unlocks a faster output-allocation path automatically). All schemes are defined in a single table (`SNICHOLLS_FOR_EACH_SCHEME`), which every adapter reuses — adding a scheme there adds it everywhere.
 
@@ -361,7 +361,7 @@ static_assert(!IsSecureV<SecureMap<std::string, int>>);    // key type not secur
 template<SecureStorage T> void store_secret(const T&);      // constrain APIs to secure types
 ```
 
-**Read the scope honestly.** This is best-effort defense-in-depth, *not* a hard guarantee: it doesn't stop copies the compiler makes before the wipe (register spills), secrets paged to swap (no `mlock`), or use of freed pages (no guard pages); `SecureString`'s small-string optimisation keeps short values inline and unwiped (use `SecureBytes` for short secrets); and base-encoding a secret still yields an ordinary `std::string` you must handle. For hard requirements (mlock, guard pages, audited wiping) use a dedicated library such as libsodium's secure-memory API — this header is the lightweight, dependency-free option.
+**Read the scope honestly.** This is best-effort defense-in-depth, *not* a hard guarantee: it doesn't stop copies the compiler makes before the wipe (register spills), secrets paged to swap (no `mlock`), or use of freed pages (no guard pages); `SecureString`'s small-string optimisation keeps short values inline and unwiped (use `SecureBytes` for short secrets); and base-encoding a secret still yields an ordinary `std::string` you must handle. For hard requirements (mlock, guard pages, audited wiping) use a dedicated library such as libsodium's secure-memory API — this header is the lightweight, dependency-free option. DO NOT USE THIS APPROACH ALONE FOR SECURITY, DEFENCE OR HIGH END FINANCIAL SERVICES APPLICATIONS - YOU HAVE BEEN WARNED!
 
 ### Encryption and key-value storage (optional drop-ins)
 
