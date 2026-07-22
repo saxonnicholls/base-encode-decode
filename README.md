@@ -361,7 +361,7 @@ static_assert(!IsSecureV<SecureMap<std::string, int>>);    // key type not secur
 template<SecureStorage T> void store_secret(const T&);      // constrain APIs to secure types
 ```
 
-**Read the scope honestly.** This is best-effort defense-in-depth, *not* a hard guarantee: it doesn't stop copies the compiler makes before the wipe (register spills), secrets paged to swap (no `mlock`), or use of freed pages (no guard pages); `SecureString`'s small-string optimisation keeps short values inline and unwiped (use `SecureBytes` for short secrets); and base-encoding a secret still yields an ordinary `std::string` you must handle. For hard requirements (mlock, guard pages, audited wiping) use a dedicated library such as libsodium's secure-memory API — this header is the lightweight, dependency-free option. DO NOT USE THIS APPROACH ALONE FOR SECURITY, DEFENCE OR HIGH END FINANCIAL SERVICES APPLICATIONS - YOU HAVE BEEN WARNED!
+**Read the scope honestly.** This is best-effort defense-in-depth, *not* a hard guarantee: it doesn't stop copies the compiler makes before the wipe (register spills), secrets paged to swap (no `mlock`), or use of freed pages (no guard pages); `SecureString`'s small-string optimisation keeps short values inline and unwiped (use `SecureBytes` for short secrets); and base-encoding a secret still yields an ordinary `std::string` you must handle. For hard requirements (mlock, guard pages, audited wiping) use a dedicated library such as libsodium's secure-memory API — this header is the lightweight, dependency-free option. DO NOT USE THIS APPROACH ALONE FOR SECURITY, DEFENCE OR HIGH END FINANCIAL SERVICES / CRYPTO APPLICATIONS - YOU HAVE BEEN WARNED!
 
 ### Encryption and key-value storage (optional drop-ins)
 
