@@ -83,7 +83,7 @@ namespace snicholls {
                 throw std::invalid_argument("Invalid character after padding");
             }
 
-            int index = detail::ReverseTable<AlphabetSize, Alphabet>[static_cast<unsigned char>(c)];
+            int index = detail::ReverseTable<BitGroupSize, AlphabetSize, Alphabet>[static_cast<unsigned char>(c)];
             if (index < 0) {
                 throw std::invalid_argument("Invalid character in encoded string");
             }

@@ -53,20 +53,30 @@ namespace snicholls {
 
         // O(1) reverse lookup: character -> alphabet index, or -1 if not in the
         // alphabet. consteval: the table is always built at compile time.
-        template<size_t AlphabetSize, const std::array<char, AlphabetSize>& Alphabet>
+        //
+        // Only the first 2^BitGroupSize symbols are mapped. These are bit-group
+        // codecs, so an index must fit in BitGroupSize bits; an alphabet listing
+        // more symbols than that (Base36 lists 36 but is driven at 5 bits) can
+        // never emit the surplus, and accepting them on decode would shift a
+        // too-large index into the neighbouring group and silently corrupt the
+        // output. Leaving them at -1 makes the existing checks reject them.
+        template<size_t BitGroupSize, size_t AlphabetSize, const std::array<char, AlphabetSize>& Alphabet>
         consteval std::array<int8_t, 256> MakeReverseTable() {
+            static_assert(AlphabetSize >= (size_t{1} << BitGroupSize),
+                          "Alphabet is too small for BitGroupSize");
             std::array<int8_t, 256> table{};
             for (auto& entry : table) {
                 entry = -1;
             }
-            for (size_t i = 0; i < AlphabetSize; ++i) {
+            for (size_t i = 0; i < (size_t{1} << BitGroupSize); ++i) {
                 table[static_cast<unsigned char>(Alphabet[i])] = static_cast<int8_t>(i);
             }
             return table;
         }
 
-        template<size_t AlphabetSize, const std::array<char, AlphabetSize>& Alphabet>
-        inline constexpr std::array<int8_t, 256> ReverseTable = MakeReverseTable<AlphabetSize, Alphabet>();
+        template<size_t BitGroupSize, size_t AlphabetSize, const std::array<char, AlphabetSize>& Alphabet>
+        inline constexpr std::array<int8_t, 256> ReverseTable =
+            MakeReverseTable<BitGroupSize, AlphabetSize, Alphabet>();
 
         // A "block" is the smallest run of whole bytes that encodes to whole
         // characters: lcm(8, BitGroupSize) bits. Base64: 3 bytes <-> 4 chars;
@@ -155,7 +165,7 @@ namespace snicholls {
                 uint64_t word = 0;
                 bool invalid = false;
                 for (size_t i = 0; i < blockChars; ++i) {
-                    const int index = ReverseTable<AlphabetSize, Alphabet>[static_cast<unsigned char>(first[i])];
+                    const int index = ReverseTable<BitGroupSize, AlphabetSize, Alphabet>[static_cast<unsigned char>(first[i])];
                     invalid = invalid || (index < 0);
                     word = (word << BitGroupSize) | static_cast<uint8_t>(index);
                 }
@@ -173,7 +183,7 @@ namespace snicholls {
             size_t bitBuffer = 0;
             int bitBufferLength = 0;
             for (; first != last; ++first) {
-                int index = ReverseTable<AlphabetSize, Alphabet>[static_cast<unsigned char>(*first)];
+                int index = ReverseTable<BitGroupSize, AlphabetSize, Alphabet>[static_cast<unsigned char>(*first)];
                 if (index < 0) {
                     throw std::invalid_argument("Invalid character in encoded string");
                 }
@@ -305,7 +315,7 @@ namespace snicholls {
                 throw std::invalid_argument("Invalid character after padding");
             }
 
-            int index = detail::ReverseTable<AlphabetSize, Alphabet>[c];
+            int index = detail::ReverseTable<BitGroupSize, AlphabetSize, Alphabet>[c];
             if (index < 0) {
                 throw std::invalid_argument("Invalid character in encoded string");
             }
@@ -347,7 +357,7 @@ namespace snicholls {
                 throw std::invalid_argument("Invalid character after padding");
             }
 
-            int index = detail::ReverseTable<AlphabetSize, Alphabet>[c];
+            int index = detail::ReverseTable<BitGroupSize, AlphabetSize, Alphabet>[c];
             if (index < 0) {
                 throw std::invalid_argument("Invalid character in encoded string");
             }

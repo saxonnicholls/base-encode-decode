@@ -1188,6 +1188,24 @@ static void TestInvalidInput() {
     // '=' in unpadded schemes is simply not in the alphabet
     AssertThrowsInvalidArgument([] { DecodeBase16("66=="); });
 
+    // Base36 lists 36 symbols but is driven at 5 bits, so only the first 32 are
+    // reachable. W/X/Y/Z must be rejected, not decoded: their indices (32..35)
+    // do not fit in a 5-bit group and would corrupt the neighbouring one.
+    for (size_t value = 0; value <= 0xFFFF; ++value) {
+        std::string input;
+        input.push_back(static_cast<char>(value >> 8));
+        input.push_back(static_cast<char>(value & 0xFF));
+        for (char c : EncodeBase36(input)) {
+            assert(c != 'W' && c != 'X' && c != 'Y' && c != 'Z');
+        }
+    }
+    AssertThrowsInvalidArgument([] { DecodeBase36("WW"); });
+    AssertThrowsInvalidArgument([] { DecodeBase36("0W"); });
+    AssertThrowsInvalidArgument([] { DecodeBase36("ZZ"); });
+    AssertThrowsInvalidArgument([] { DecodeBase36Binary("WW"); });
+    AssertThrowsInvalidArgument([] { DecodeBase36Parallel("WW", 2); });
+    assert(DecodeBase36(EncodeBase36(std::string("hi"))) == "hi");
+
     // Invalid byte deep inside a large input must surface from worker threads
     std::string big(2 * 1024 * 1024, 'A');
     big[big.size() / 2] = '!';

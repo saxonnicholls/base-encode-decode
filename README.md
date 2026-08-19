@@ -63,7 +63,7 @@ The project includes implementations of the following encoding schemes:
 - **Base8**: Custom implementation of octal encoding.
 - **Base4**: Custom implementation using a 4-character alphabet.
 - **Base2**: Simple binary encoding.
-- **Base36**: A base36 encoding scheme that uses digits `0-9` and letters `A-Z` (a 5-bit-per-character variant, not arithmetic base conversion).
+- **Base36**: A base36 encoding scheme that uses digits `0-9` and letters `A-V` (a 5-bit-per-character variant, not arithmetic base conversion). Only 32 symbols are reachable at 5 bits per character, so `W`, `X`, `Y` and `Z` are never emitted and are rejected on decode.
 - **Base32Crockford**: A variant of Base32 encoding created by Douglas Crockford, which includes additional error-correction features and alternative symbol mappings.
 
 ## Features
