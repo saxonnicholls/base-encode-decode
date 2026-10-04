@@ -41,6 +41,7 @@ To drop the library into a project, copy the `BaseEncodeDecode` headers you need
 | `utils/fixed_string.hpp`          | util: compile-time`fixed_string` (NTTP-usable)                                           |
 | `utils/overloaded.hpp`            | util: lambda-overload-set helper (per-type handlers)                                       |
 | `utils/type_registry.hpp`         | util: name → type construct-and-dispatch (no variant/base/switch)                         |
+| `utils/basic_type_registry.hpp`   | util: the codec-free core of `type_registry.hpp` (custom deserialiser, no encoder)        |
 | `utils/secure.hpp`                | util: wiped-memory`SecureBytes`/`SecureString`, `IsSecure<T>`, constant-time compare |
 | `utils/encryption.hpp`            | util: general pure-virtual`Encryptor` interface (authenticated)                          |
 | `utils/encryption_openssl.hpp`    | drop-in: AES-256-GCM (auto-enabled with OpenSSL)                                           |
@@ -325,6 +326,8 @@ bool handled = Registry::dispatch(name, serialised, overloaded{
     [](Object3&& o) { handleThree(o); },
 });                                          // returns false if `name` isn't registered
 ```
+
+**Codec-free core.** `TypeRegistry` is `BasicTypeRegistry` (`utils/basic_type_registry.hpp`) plus the Base64 defaults. The basic registry — `Named`, `count`, `names`, `contains`, `nameOf`, and `dispatch` with your own deserialiser — depends only on `fixed_string.hpp`, so include it directly when you dispatch JSON, protobuf or any other format and don't want the encoder compiled in.
 
 The reverse direction is `Registry::serialize(obj)`, which returns `{ registered name, Base64 }` using a compile-time reverse lookup (`nameOf<T>()` — naming an unregistered type is a compile error). Deserialisation defaults to this library's Base64 object codec, but `dispatch` takes a custom deserialiser `(std::type_identity<T>, string) -> T`, so JSON or any other format drops in — again, with no base class.
 

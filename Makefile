@@ -19,7 +19,7 @@ CPP_BASE64 = tests/third_party/cpp-base64/base64.cpp
 
 BENCH_MB ?= 512
 
-all: build/tests build/tests_scalar build/bench build/demo
+all: build/tests build/tests_scalar build/tests_basic_type_registry build/bench build/demo
 
 build:
 	mkdir -p build
@@ -31,6 +31,10 @@ build/tests: tests/test_main.cpp $(CPP_BASE64) $(HEADERS) | build
 build/tests_scalar: tests/test_main.cpp $(CPP_BASE64) $(HEADERS) | build
 	$(CXX) $(CXXFLAGS) -DSNICHOLLS_NO_SIMD $(INCLUDES) tests/test_main.cpp $(CPP_BASE64) -o $@
 
+# The codec-free registry on its own (fails to compile if it pulls in the encoder)
+build/tests_basic_type_registry: tests/test_basic_type_registry.cpp $(HEADERS) | build
+	$(CXX) $(CXXFLAGS) $(INCLUDES) tests/test_basic_type_registry.cpp -o $@
+
 build/bench: benchmarks/benchmark_main.cpp $(CPP_BASE64) $(HEADERS) | build
 	$(CXX) $(CXXFLAGS) $(INCLUDES) benchmarks/benchmark_main.cpp $(CPP_BASE64) -o $@
 
@@ -41,9 +45,10 @@ build/bench_scalar: benchmarks/benchmark_main.cpp $(CPP_BASE64) $(HEADERS) | bui
 build/demo: BaseEncodeDecode/main.cpp $(HEADERS) | build
 	$(CXX) $(CXXFLAGS) $(INCLUDES) BaseEncodeDecode/main.cpp -o $@
 
-test: build/tests build/tests_scalar
+test: build/tests build/tests_scalar build/tests_basic_type_registry
 	./build/tests
 	./build/tests_scalar
+	./build/tests_basic_type_registry
 
 bench: build/bench
 	./build/bench $(BENCH_MB)

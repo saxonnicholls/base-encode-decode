@@ -43,6 +43,11 @@ if(BASE_ENCODE_DECODE_BUILD_TESTS)
     target_compile_definitions(tests_scalar PRIVATE SNICHOLLS_NO_SIMD)
     add_test(NAME base_encode_decode_tests_scalar COMMAND tests_scalar)
 
+    # The codec-free registry on its own (fails to compile if it pulls in the encoder)
+    add_executable(tests_basic_type_registry tests/test_basic_type_registry.cpp)
+    target_link_libraries(tests_basic_type_registry PRIVATE snicholls::base_encode_decode)
+    add_test(NAME base_encode_decode_tests_basic_type_registry COMMAND tests_basic_type_registry)
+
     add_executable(bench benchmarks/benchmark_main.cpp tests/third_party/cpp-base64/base64.cpp)
     target_include_directories(bench PRIVATE tests/third_party/cpp-base64)
     target_link_libraries(bench PRIVATE snicholls::base_encode_decode)
