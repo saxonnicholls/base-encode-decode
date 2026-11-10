@@ -51,6 +51,8 @@ jobs:
             extra: -mssse3
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true
 
       - name: Compiler version
         run: ${{ matrix.cxx }} --version
@@ -72,6 +74,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true
       - name: Configure
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
       - name: Build
@@ -84,6 +88,8 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true
       - name: Build and run the Xcode project
         run: |
           xcodebuild -project BaseEncodeDecode.xcodeproj -scheme BaseEncodeDecode \

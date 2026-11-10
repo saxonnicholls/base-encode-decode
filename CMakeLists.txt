@@ -6,8 +6,8 @@ project(BaseEncodeDecode VERSION 1.0.0 LANGUAGES CXX)
 #   add_subdirectory(base-encode-decode)   (or FetchContent)
 #   target_link_libraries(app PRIVATE snicholls::base_encode_decode)
 # ---------------------------------------------------------------------------
-# snicholls-core: the family's vocabulary types (snicholls::overloaded and the rest). One core for the whole family:
-# a consumer that added core first keeps its own copy (its pin is the version), and this one is skipped.
+# snicholls-core (third_party/core): the vocabulary types, snicholls::overloaded among them. One copy of core per
+# build: a consumer that added core first keeps its own (its pin is the version), and this one is skipped.
 if(NOT TARGET snicholls::core)
     add_subdirectory(third_party/core EXCLUDE_FROM_ALL)
 endif()

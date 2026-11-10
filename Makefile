@@ -12,7 +12,7 @@
 
 CXX ?= clang++
 CXXFLAGS ?= -std=gnu++23 -O3 -Wall -Wextra
-INCLUDES = -IBaseEncodeDecode -Itests/third_party/cpp-base64 -Itests/third_party
+INCLUDES = -IBaseEncodeDecode -Ithird_party/core/include -Itests/third_party/cpp-base64 -Itests/third_party
 
 HEADERS = $(wildcard BaseEncodeDecode/*.hpp BaseEncodeDecode/utils/*.hpp)
 CPP_BASE64 = tests/third_party/cpp-base64/base64.cpp
@@ -65,7 +65,7 @@ OPENSSL_PREFIX := $(shell brew --prefix openssl@3 2>/dev/null || echo /usr)
 SODIUM_PREFIX  := $(shell brew --prefix libsodium 2>/dev/null || echo /usr)
 ROCKSDB_PREFIX := $(shell brew --prefix rocksdb 2>/dev/null || echo /usr)
 
-CRYPTO_INCLUDES = -IBaseEncodeDecode -I$(OPENSSL_PREFIX)/include -I$(SODIUM_PREFIX)/include
+CRYPTO_INCLUDES = -IBaseEncodeDecode -Ithird_party/core/include -I$(OPENSSL_PREFIX)/include -I$(SODIUM_PREFIX)/include
 CRYPTO_LINK = -L$(OPENSSL_PREFIX)/lib -lcrypto -L$(SODIUM_PREFIX)/lib -lsodium
 ifeq ($(ROCKSDB),1)
   CRYPTO_INCLUDES += -I$(ROCKSDB_PREFIX)/include
