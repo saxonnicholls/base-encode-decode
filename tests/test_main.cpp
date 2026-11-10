@@ -39,7 +39,7 @@
 #include "encode_decode_object.hpp"
 #include "utils/stl_support.hpp"
 #include "utils/secure.hpp"
-#include "utils/fixed_string.hpp"
+#include <snicholls/core/fixed_string.hpp>
 #include <snicholls/core/overloaded.hpp>
 #include "utils/type_registry.hpp"
 #include "encode_decode_web.hpp"

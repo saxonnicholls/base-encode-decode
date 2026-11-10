@@ -47,10 +47,11 @@
 //  accepts a custom deserialiser (a callable (std::type_identity<T>, string) ->
 //  T), so any format - JSON, your own bytes - drops in without a base class.
 //
-//  TypeRegistry is BasicTypeRegistry (utils/basic_type_registry.hpp: names,
-//  contains, nameOf, dispatch with a custom deserialiser - no codec) plus the
-//  Base64 defaults below. Include basic_type_registry.hpp directly when you do
-//  not want the encoder pulled in.
+//  TypeRegistry is snicholls-core's basic_type_registry
+//  (<snicholls/core/basic_type_registry.hpp>: names, contains, name_of, dispatch
+//  with a custom deserialiser - no codec) plus nameOf and the Base64 defaults
+//  below. Include core's header directly when you do not want the encoder
+//  pulled in. Named is core's named under this library's name.
 //
 
 #ifndef encode_decode_type_registry_hpp
@@ -62,21 +63,35 @@
 #include <utility>
 
 #include "../encode_decode_object.hpp"
-#include "basic_type_registry.hpp"
+#include <snicholls/core/basic_type_registry.hpp>
+#include <snicholls/core/fixed_string.hpp>
 
 namespace snicholls {
 
-    // BasicTypeRegistry plus this library's Base64 object codec as the default
-    // serialiser / deserialiser.
+#ifndef encode_decode_named_alias
+#define encode_decode_named_alias
+    // Binds a compile-time name to a type: Named<"object1", Object1>. The same as core's named.
+    template<basic_fixed_string Name, typename T>
+    using Named = named<Name, T>;
+#endif
+
+    // core's basic_type_registry plus this library's Base64 object codec as the
+    // default serialiser / deserialiser.
     template<typename... Bindings>
-    struct TypeRegistry : BasicTypeRegistry<Bindings...> {
-        using Base = BasicTypeRegistry<Bindings...>;
+    struct TypeRegistry : basic_type_registry<Bindings...> {
+        using Base = basic_type_registry<Bindings...>;
         using Base::dispatch;
+
+        // The registered name for a type; a compile error for an unregistered one.
+        template<typename T>
+        static consteval std::string_view nameOf() {
+            return Base::template name_of<T>();
+        }
 
         // Serialise an object to { registered name, Base64 }.
         template<typename T>
         static std::pair<std::string_view, std::string> serialize(const T& obj) {
-            return { Base::template nameOf<T>(), EncodeBase64Object(obj) };
+            return { nameOf<T>(), EncodeBase64Object(obj) };
         }
 
         // Match `name`, deserialise the bound type from Base64 `serialized` with

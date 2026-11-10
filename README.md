@@ -38,10 +38,10 @@ To drop the library into a project, copy the `BaseEncodeDecode` headers you need
 | `encode_decode_dna.hpp`           | adapter: DNA/RNA 2-bit and 4-bit (IUPAC) packing                                           |
 | `encode_decode_object.hpp`        | adapter: serialise an object (trait-based, extensible)                                     |
 | `utils/stl_support.hpp`           | adapter add-on: ObjectSerializer for the STL container zoo                                 |
-| `utils/fixed_string.hpp`          | util: compile-time`fixed_string` (NTTP-usable)                                           |
+| `utils/fixed_string.hpp`          | deprecated: forwards to snicholls-core's `<snicholls/core/fixed_string.hpp>`               |
 | `utils/overloaded.hpp`            | deprecated: forwards to snicholls-core's `<snicholls/core/overloaded.hpp>`                 |
 | `utils/type_registry.hpp`         | util: name → type construct-and-dispatch (no variant/base/switch)                         |
-| `utils/basic_type_registry.hpp`   | util: the codec-free core of `type_registry.hpp` (custom deserialiser, no encoder)        |
+| `utils/basic_type_registry.hpp`   | deprecated: forwards to snicholls-core's `<snicholls/core/basic_type_registry.hpp>`        |
 | `utils/secure.hpp`                | util: wiped-memory`SecureBytes`/`SecureString`, `IsSecure<T>`, constant-time compare |
 | `utils/encryption.hpp`            | util: general pure-virtual`Encryptor` interface (authenticated)                          |
 | `utils/encryption_openssl.hpp`    | drop-in: AES-256-GCM (auto-enabled with OpenSSL)                                           |
@@ -313,7 +313,7 @@ A common serialisation need: you read `{ "object1", "…serialised…" }` off th
 ```cpp
 #include "encode_decode_object.hpp"   // to (de)serialise your types
 #include "utils/type_registry.hpp"
-#include "utils/overloaded.hpp"
+#include <snicholls/core/overloaded.hpp>
 
 using Registry = TypeRegistry<
     Named<"object1", Object1>,        // compile-time name  ↔  type
@@ -327,14 +327,14 @@ bool handled = Registry::dispatch(name, serialised, overloaded{
 });                                          // returns false if `name` isn't registered
 ```
 
-**Codec-free core.** `TypeRegistry` is `BasicTypeRegistry` (`utils/basic_type_registry.hpp`) plus the Base64 defaults. The basic registry — `Named`, `count`, `names`, `contains`, `nameOf`, and `dispatch` with your own deserialiser — depends only on `fixed_string.hpp`, so include it directly when you dispatch JSON, protobuf or any other format and don't want the encoder compiled in.
+**Codec-free core.** `TypeRegistry` is snicholls-core's `basic_type_registry` (`<snicholls/core/basic_type_registry.hpp>`) plus `nameOf` and the Base64 defaults; `Named` is core's `named`. The basic registry — `named`, `count`, `names`, `contains`, `name_of`, and `dispatch` with your own deserialiser — depends only on core's `fixed_string.hpp`, so include it directly when you dispatch JSON, protobuf or any other format and don't want the encoder compiled in.
 
 The reverse direction is `Registry::serialize(obj)`, which returns `{ registered name, Base64 }` using a compile-time reverse lookup (`nameOf<T>()` — naming an unregistered type is a compile error). Deserialisation defaults to this library's Base64 object codec, but `dispatch` takes a custom deserialiser `(std::type_identity<T>, string) -> T`, so JSON or any other format drops in — again, with no base class.
 
 Two small building blocks back it, both usable on their own:
 
-- **`utils/fixed_string.hpp`** — a clean, dependency-free compile-time `basic_fixed_string<CharT, N>` (with `fixed_string`/`wfixed_string`/`u8/16/32` aliases) usable as a non-type template parameter, so a type can be *bound to a literal name*. Std-style API: iterators, `string_view` conversion, comparison, concatenation, `substr`, `std::hash`. Same idiom as [unterumarmung/fixed_string](https://github.com/unterumarmung/fixed_string), kept minimal to avoid a dependency.
-- **`utils/overloaded.hpp`** — the lambda-overload-set helper, so a per-type handler is one lambda per type (and the compiler enforces that every registered type is handled, unless you add a generic `[](auto&&){}` catch-all).
+- **`<snicholls/core/fixed_string.hpp>`** — a compile-time `basic_fixed_string<CharT, N>` (with `fixed_string`/`wfixed_string`/`u8/16/32` aliases) usable as a non-type template parameter, so a type can be *bound to a literal name*. Std-style API: iterators, `string_view` conversion, comparison, concatenation, `substr`, `std::hash`. It moved from `utils/fixed_string.hpp`, which now forwards to it.
+- **`<snicholls/core/overloaded.hpp>`** — the lambda-overload-set helper (formerly `utils/overloaded.hpp`), so a per-type handler is one lambda per type (and the compiler enforces that every registered type is handled, unless you add a generic `[](auto&&){}` catch-all).
 
 ### Secure memory for secrets (`utils/secure.hpp`)
 
