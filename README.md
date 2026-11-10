@@ -39,7 +39,7 @@ To drop the library into a project, copy the `BaseEncodeDecode` headers you need
 | `encode_decode_object.hpp`        | adapter: serialise an object (trait-based, extensible)                                     |
 | `utils/stl_support.hpp`           | adapter add-on: ObjectSerializer for the STL container zoo                                 |
 | `utils/fixed_string.hpp`          | util: compile-time`fixed_string` (NTTP-usable)                                           |
-| `utils/overloaded.hpp`            | util: lambda-overload-set helper (per-type handlers)                                       |
+| `utils/overloaded.hpp`            | deprecated: forwards to snicholls-core's `<snicholls/core/overloaded.hpp>`                 |
 | `utils/type_registry.hpp`         | util: name → type construct-and-dispatch (no variant/base/switch)                         |
 | `utils/basic_type_registry.hpp`   | util: the codec-free core of `type_registry.hpp` (custom deserialiser, no encoder)        |
 | `utils/secure.hpp`                | util: wiped-memory`SecureBytes`/`SecureString`, `IsSecure<T>`, constant-time compare |

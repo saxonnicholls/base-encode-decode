@@ -1,0 +1,4 @@
+[submodule "third_party/core"]
+	path = third_party/core
+	url = https://github.com/saxonnicholls/core.git
+	shallow = true

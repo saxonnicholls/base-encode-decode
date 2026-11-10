@@ -30,7 +30,7 @@
 //      if (!handled) { /* name was not a registered type */ }
 //
 //  For a per-type handler with no `if constexpr`, combine one lambda per type
-//  with utils/overloaded.hpp (each registered type must be covered, or add a
+//  with snicholls::overloaded from <snicholls/core/overloaded.hpp> (each registered type must be covered, or add a
 //  generic `[](auto&&){}` catch-all):
 //
 //      Registry::dispatch(name, serialised, overloaded{

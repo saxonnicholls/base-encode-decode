@@ -21,7 +21,7 @@
 #include <type_traits>
 
 #include "utils/basic_type_registry.hpp"
-#include "utils/overloaded.hpp"
+#include <snicholls/core/overloaded.hpp>
 
 // The point of the split: the generic registry must not drag in the codec.
 #ifdef SNICHOLLS_FOR_EACH_SCHEME

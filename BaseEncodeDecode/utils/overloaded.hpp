@@ -5,6 +5,10 @@
 //  utils/overloaded.hpp
 //  BaseEncodeDecode
 //
+//  DEPRECATED: snicholls::overloaded lives in snicholls-core, <snicholls/core/overloaded.hpp>, which adds
+//  first_match, function-pointer elements and empty-base layout. This header only forwards to it, so code that
+//  includes it keeps working; include core's header instead. It will be removed in a later major version.
+//
 //  The classic lambda-overload-set helper: combine several callables into one
 //  whose operator() is the overload set of all of them. Overload resolution
 //  picks the right one at compile time - a clean alternative to a switch or an
@@ -29,16 +33,6 @@
 #ifndef encode_decode_overloaded_hpp
 #define encode_decode_overloaded_hpp
 
-namespace snicholls {
-
-    template<typename... Fs>
-    struct overloaded : Fs... {
-        using Fs::operator()...;
-    };
-
-    // CTAD guide (redundant under C++20 aggregate CTAD, kept for clarity/C++17).
-    template<typename... Fs>
-    overloaded(Fs...) -> overloaded<Fs...>;
-}
+#include <snicholls/core/overloaded.hpp>
 
 #endif /* encode_decode_overloaded_hpp */

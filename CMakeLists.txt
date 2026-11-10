@@ -6,6 +6,13 @@ project(BaseEncodeDecode VERSION 1.0.0 LANGUAGES CXX)
 #   add_subdirectory(base-encode-decode)   (or FetchContent)
 #   target_link_libraries(app PRIVATE snicholls::base_encode_decode)
 # ---------------------------------------------------------------------------
+# snicholls-core: the family's vocabulary types (snicholls::overloaded and the rest). One core for the whole family:
+# a consumer that added core first keeps its own copy (its pin is the version), and this one is skipped.
+if(NOT TARGET snicholls::core)
+    add_subdirectory(third_party/core EXCLUDE_FROM_ALL)
+endif()
+snicholls_core_require(0.5.0)
+
 add_library(base_encode_decode INTERFACE)
 add_library(snicholls::base_encode_decode ALIAS base_encode_decode)
 
@@ -15,7 +22,7 @@ target_include_directories(base_encode_decode INTERFACE
 target_compile_features(base_encode_decode INTERFACE cxx_std_20)
 
 find_package(Threads REQUIRED) # the parallel API uses std::thread
-target_link_libraries(base_encode_decode INTERFACE Threads::Threads)
+target_link_libraries(base_encode_decode INTERFACE Threads::Threads snicholls::core)
 
 install(DIRECTORY BaseEncodeDecode/ DESTINATION include FILES_MATCHING PATTERN "*.hpp")
 
@@ -55,4 +62,9 @@ if(BASE_ENCODE_DECODE_BUILD_TESTS)
 
     add_executable(demo BaseEncodeDecode/main.cpp)
     target_link_libraries(demo PRIVATE snicholls::base_encode_decode)
+endif()
+
+# One core version per build: a second copy reached through another library is a configure error.
+if(PROJECT_IS_TOP_LEVEL)
+    snicholls_core_assert_single_version()
 endif()
