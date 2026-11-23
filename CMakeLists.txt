@@ -62,6 +62,22 @@ if(BASE_ENCODE_DECODE_BUILD_TESTS)
 
     add_executable(demo BaseEncodeDecode/main.cpp)
     target_link_libraries(demo PRIVATE snicholls::base_encode_decode)
+
+    # tooling (third_party/tooling, a test-only submodule pinned to a tag): snicholls_base_encode_decode.hpp, the single
+    # include, is generated in the build tree and compiled on its own, and the CTest check.single_include proves it
+    # complete, from tooling.conf
+    if(NOT EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/third_party/tooling/cmake/SnichollsTooling.cmake)
+        message(FATAL_ERROR "third_party/tooling is empty - run: git submodule update --init --recursive")
+    endif()
+    include(${CMAKE_CURRENT_SOURCE_DIR}/third_party/tooling/cmake/SnichollsTooling.cmake)
+    if(MSVC)
+        set(base_encode_decode_warnings /W4 /WX)
+    else()
+        set(base_encode_decode_warnings -Wall -Wextra -Werror)
+    endif()
+    snicholls_single_include_check(base_encode_decode_single_include CXX_STANDARD 20
+        COMPILE_OPTIONS ${base_encode_decode_warnings})
+    snicholls_tooling_add_checks(SINGLE_INCLUDE)
 endif()
 
 # One core version per build: a second copy reached through another library is a configure error.

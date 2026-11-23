@@ -1,7 +1,9 @@
 # Builds the test suite and benchmark from the command line.
 # The Xcode project continues to build the demo (main.cpp) as before.
 #
-#   make test                 build and run the test suite (SIMD and scalar builds)
+#   make test                 check the single include, build and run the test suite (SIMD and scalar builds)
+#   make single-include       write single_include/snicholls_base_encode_decode.hpp for this commit (git-ignored)
+#   make check                the single include holds every header (bar the opted-out ones)
 #   make bench                build and run the benchmark (default 512 MiB)
 #   make bench BENCH_MB=2048  benchmark with a 2 GiB input
 #   make demo                 build and run the demo
@@ -45,7 +47,15 @@ build/bench_scalar: benchmarks/benchmark_main.cpp $(CPP_BASE64) $(HEADERS) | bui
 build/demo: BaseEncodeDecode/main.cpp $(HEADERS) | build
 	$(CXX) $(CXXFLAGS) $(INCLUDES) BaseEncodeDecode/main.cpp -o $@
 
-test: build/tests build/tests_scalar build/tests_basic_type_registry
+# single_include/snicholls_base_encode_decode.hpp, the whole library in one file, for this commit (git-ignored: a
+# release's is attached to the release; the CMake build also generates and compiles its own, tooling STANDARDS section 2)
+single-include:
+	python3 third_party/tooling/scripts/single_include.py
+
+check:
+	python3 third_party/tooling/scripts/single_include.py --check
+
+test: check build/tests build/tests_scalar build/tests_basic_type_registry
 	./build/tests
 	./build/tests_scalar
 	./build/tests_basic_type_registry
@@ -99,4 +109,4 @@ demo: build/demo
 clean:
 	rm -rf build
 
-.PHONY: all test bench bench-scalar test-crypto demo demo-crypto amalgamate clean
+.PHONY: all test single-include check bench bench-scalar test-crypto demo demo-crypto amalgamate clean

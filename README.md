@@ -26,6 +26,7 @@ To drop the library into a project, copy the `BaseEncodeDecode` headers you need
 | File                                | Role                                                                                       |
 | ----------------------------------- | ------------------------------------------------------------------------------------------ |
 | `encode_decode_base_whatever.hpp` | the library (include this)                                                                 |
+| `base_encode_decode.hpp`          | umbrella: every header below except the four that need a third party                       |
 | `alphabet.hpp`                    | the encoding alphabets                                                                     |
 | `encode_decode_simd_intel.hpp`    | x86 SSSE3 kernels (auto-included; optional)                                                |
 | `encode_decode_simd_arm.hpp`      | AArch64 NEON kernels (auto-included; optional)                                             |
@@ -468,6 +469,15 @@ or with CMake: `cmake -S . -B build/cmake -DCMAKE_BUILD_TYPE=Release && cmake --
 The test suite is deliberately lightweight — plain `assert()`, no framework. It covers: RFC 4648 section 10 vectors (also as `static_assert`s), padding shape, round trips for every scheme over string/Binary/generic inputs, Base64Url equivalence properties, streaming with every chunking of the input, the bitset/bitstring/format/web/json adapters, parallel-equals-serial across sizes and thread counts, malformed input rejection (including errors surfacing from worker threads and SIMD validation), and cross-validation of Base64 against cpp-base64. The whole suite runs twice — SIMD active and forced scalar — and is exercised on both x86 and ARM.
 
 Third-party code (`cpp-base64`, `nlohmann/json`) is vendored under `tests/third_party/` and used **only** by the tests; the library itself depends on nothing.
+
+### The single include
+
+`snicholls_base_encode_decode.hpp` is the whole library, with the snicholls-core headers it uses, in one file that
+needs nothing but the standard library: download it from the
+[release](https://github.com/saxonnicholls/base-encode-decode/releases) you pin and
+`#include "snicholls_base_encode_decode.hpp"`. It is generated from `BaseEncodeDecode/base_encode_decode.hpp` and
+never committed; `make single-include` writes it for any other commit (see `single_include/README.md`). The
+nlohmann::json, OpenSSL, libsodium and RocksDB adapters are not in it.
 
 ### Single-file amalgamation (Compiler Explorer)
 

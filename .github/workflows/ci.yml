@@ -3,6 +3,7 @@ name: CI
 on:
   push:
     branches: [main]
+    tags: ['v*']
   pull_request:
   workflow_dispatch:
 
@@ -52,7 +53,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          submodules: true
+          submodules: recursive
+
+      - name: The single include holds every public header
+        run: python3 third_party/tooling/scripts/single_include.py --check
 
       - name: Compiler version
         run: ${{ matrix.cxx }} --version
@@ -75,7 +79,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          submodules: true
+          submodules: recursive
       - name: Configure
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
       - name: Build
@@ -89,9 +93,46 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          submodules: true
+          submodules: recursive
       - name: Build and run the Xcode project
         run: |
           xcodebuild -project BaseEncodeDecode.xcodeproj -scheme BaseEncodeDecode \
             -configuration Debug -derivedDataPath build/xcode CODE_SIGNING_ALLOWED=NO build
           build/xcode/Build/Products/Debug/BaseEncodeDecode | tail -n 3
+
+  # The single include is never committed, so it cannot be stale: on a release tag it is generated from the tagged
+  # commit, compiled alone with warnings as errors, and attached to the GitHub release, once the gating legs are green
+  single-include:
+    name: Release the single include
+    needs: [test, cmake, xcode]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Generate it from the tagged commit
+        run: |
+          set -euo pipefail
+          python3 third_party/tooling/scripts/single_include.py --check
+          python3 third_party/tooling/scripts/single_include.py --out "$RUNNER_TEMP/single_include"
+          ls -l "$RUNNER_TEMP/single_include"
+
+      - name: It compiles alone, warnings as errors
+        run: |
+          printf '#include "snicholls_base_encode_decode.hpp"\n' > "$RUNNER_TEMP/use.cpp"
+          g++ -std=c++20 -Wall -Wextra -Wpedantic -Werror -fsyntax-only -I"$RUNNER_TEMP/single_include" "$RUNNER_TEMP/use.cpp"
+
+      - name: Attach it to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          gh release view "$TAG" >/dev/null 2>&1 \
+            || gh release create "$TAG" --verify-tag --title "base-encode-decode $TAG" --notes "See CHANGELOG.md for $TAG."
+          gh release upload "$TAG" "$RUNNER_TEMP/single_include/snicholls_base_encode_decode.hpp" --clobber

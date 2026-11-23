@@ -2,6 +2,20 @@
 
 All notable changes to base-encode-decode. The format follows Keep a Changelog; versions follow Semantic Versioning.
 
+## Unreleased
+
+### Added
+
+- `snicholls_base_encode_decode.hpp`, the single include: the whole library and the snicholls-core headers it uses
+  in one file that needs nothing but the standard library, generated from the new umbrella header
+  `BaseEncodeDecode/base_encode_decode.hpp` by snicholls-tooling's `single_include.py`. It is never committed: the
+  CMake build generates it and compiles it alone (`base_encode_decode_single_include`), `make check`, the CTest
+  `check.single_include` and CI fail while a header is missing from the umbrella, every release tag attaches it to the
+  GitHub release, and `make single-include` writes it locally. The headers that need a third party (nlohmann::json,
+  OpenSSL, libsodium, RocksDB) are left out on purpose.
+- `third_party/tooling`: snicholls-tooling pinned at `v0.2.1`, for the single include only (never included by the
+  library).
+
 ## 1.1.2 - 2026-11-24
 
 ### Changed

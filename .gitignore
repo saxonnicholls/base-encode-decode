@@ -7,3 +7,6 @@ xcuserdata/
 deploy_pi.sh
 pi_config.sh
 attestations.jsonl
+
+# the single include is generated, never committed (single_include/README.md)
+/single_include/*.hpp
