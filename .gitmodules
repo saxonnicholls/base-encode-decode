@@ -2,3 +2,7 @@
 	path = third_party/core
 	url = https://github.com/saxonnicholls/core.git
 	shallow = true
+[submodule "third_party/tooling"]
+	path = third_party/tooling
+	url = https://github.com/saxonnicholls/tooling.git
+	shallow = true
