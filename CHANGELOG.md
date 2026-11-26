@@ -2,6 +2,13 @@
 
 All notable changes to base-encode-decode. The format follows Keep a Changelog; versions follow Semantic Versioning.
 
+## 1.1.4 - 2026-11-27
+
+### Changed
+
+- `third_party/core` pinned to snicholls-core `v0.28.0` and `third_party/tooling` to `v0.3.2`, the family's current
+  versions (no API change here; nothing in the library needed changing).
+
 ## 1.1.3 - 2026-11-26
 
 ### Added
