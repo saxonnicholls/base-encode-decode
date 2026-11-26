@@ -2,7 +2,7 @@
 
 All notable changes to base-encode-decode. The format follows Keep a Changelog; versions follow Semantic Versioning.
 
-## Unreleased
+## 1.1.3 - 2026-11-26
 
 ### Added
 
@@ -15,6 +15,10 @@ All notable changes to base-encode-decode. The format follows Keep a Changelog; 
   OpenSSL, libsodium, RocksDB) are left out on purpose.
 - `third_party/tooling`: snicholls-tooling pinned at `v0.2.1`, for the single include only (never included by the
   library).
+
+### Changed
+
+- `third_party/core` pinned to snicholls-core `v0.24.1` and `third_party/tooling` to `v0.3.1`, the family's current versions.
 
 ## 1.1.2 - 2026-11-24
 
